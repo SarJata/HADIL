@@ -24,6 +24,15 @@
   }
 }
 
+/* Hide scrollbar for Chrome, Safari, Opera, IE, Edge and Firefox */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;  /* IE and Edge */
+  scrollbar-width: none;  /* Firefox */
+}
+
 /* Animations */
 @keyframes float {
   0% { transform: translateY(0px); }

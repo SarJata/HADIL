@@ -9,7 +9,7 @@ from typing import List, Optional, Dict, Any
 from database.session import get_db, get_engine
 from database.manager import db_manager
 from database import models
-from database.schema_extractor import get_table_schema
+from database.schema_extractor import get_table_schema, get_filtered_tables
 from ai_modules.generator import generate_sql_from_text
 from ai_modules.verifier import verify_sql_intent
 from ai_modules.intent_detector import detect_intent_and_extract_fields
@@ -58,6 +58,13 @@ class ReuseRequest(BaseModel):
 
 class SelectDatabaseRequest(BaseModel):
     db_id: str
+
+class TestConnectionRequest(BaseModel):
+    connection_uri: str
+
+class CustomConnectionRequest(BaseModel):
+    connection_uri: str
+    name: Optional[str] = "Custom Database"
 
 class InsightRequest(BaseModel):
     data: List[Dict[str, Any]]
@@ -120,23 +127,33 @@ async def get_databases():
 async def select_database(request: SelectDatabaseRequest):
     try:
         config = db_manager.set_database(request.db_id)
-        # Re-initialize tables for the new DB if needed
         models.Base.metadata.create_all(bind=db_manager.engine)
-        
-        # Trigger onboarding in the background or immediately
-        # For simplicity and small SQLite, we do it immediately or as a separate call
-        # The prompt says "onboarding should complete within seconds"
         onboarding_service.run_onboarding(request.db_id)
-        
         return {"success": True, "message": f"Switched to {config['name']}", "db_id": request.db_id}
     except Exception as e:
         logger.error(f"Failed to switch database: {e}")
         raise HTTPException(status_code=400, detail=str(e))
 
+@router.post("/test-connection")
+async def test_connection(request: TestConnectionRequest):
+    result = db_manager.test_connection(request.connection_uri)
+    return result
+
+@router.post("/connect-custom-db")
+async def connect_custom_db(request: CustomConnectionRequest):
+    try:
+        config = db_manager.set_custom_connection(request.connection_uri, name=request.name)
+        models.Base.metadata.create_all(bind=db_manager.engine)
+        onboarding_service.run_onboarding(config["id"])
+        return {"success": True, "message": f"Connected to {config['name']}", "db_id": config["id"]}
+    except Exception as e:
+        logger.error(f"Failed to connect custom database: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+
 @router.get("/database-insights")
 async def get_database_insights():
     if not db_manager.current_db_id:
-        return {"summary": None, "suggested_queries": []}
+        return {"summary": None, "suggested_queries": [], "tables": []}
     
     insights = onboarding_service.get_onboarding_insights(db_manager.current_db_id)
     if not insights:
@@ -145,7 +162,18 @@ async def get_database_insights():
         if insights_obj:
             insights = onboarding_service.get_onboarding_insights(db_manager.current_db_id)
     
-    return insights or {"summary": "No insights available.", "suggested_queries": []}
+    res = insights or {"summary": "No insights available.", "suggested_queries": []}
+    if isinstance(res, dict):
+        res["tables"] = get_filtered_tables()
+    return res
+
+@router.get("/schema/tables")
+async def get_schema_tables():
+    try:
+        tables = get_filtered_tables()
+        return {"tables": tables}
+    except Exception as e:
+        return {"tables": [], "error": str(e)}
 
 @router.get("/current-database")
 async def get_current_database():

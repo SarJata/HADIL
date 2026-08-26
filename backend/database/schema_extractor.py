@@ -54,3 +54,46 @@ def get_table_schema(table_name: str):
             "primary_key": col.get("primary_key", False)
         })
     return schema
+
+def extract_schema_snapshot() -> dict:
+    """
+    Extracts complete schema metadata (tables, columns, types, primary keys, foreign keys, constraints).
+    MUST NOT contain database rows.
+    """
+    inspector = inspect(get_engine())
+    tables = get_filtered_tables()
+    snapshot = {
+        "tables": []
+    }
+    
+    for table_name in tables:
+        columns = inspector.get_columns(table_name)
+        pk_constraint = inspector.get_pk_constraint(table_name)
+        foreign_keys = inspector.get_foreign_keys(table_name)
+        
+        col_meta = []
+        for col in columns:
+            col_meta.append({
+                "name": col["name"],
+                "type": str(col["type"]),
+                "nullable": col.get("nullable", True),
+                "default": str(col["default"]) if col.get("default") is not None else None
+            })
+            
+        fk_meta = []
+        for fk in foreign_keys:
+            fk_meta.append({
+                "constrained_columns": fk.get("constrained_columns", []),
+                "referred_table": fk.get("referred_table"),
+                "referred_columns": fk.get("referred_columns", [])
+            })
+
+        snapshot["tables"].append({
+            "table_name": table_name,
+            "columns": col_meta,
+            "primary_keys": pk_constraint.get("constrained_columns", []),
+            "foreign_keys": fk_meta
+        })
+        
+    return snapshot
+

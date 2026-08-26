@@ -73,7 +73,16 @@ JSON Structure:
         summary = result.get("summary", "No summary available.")
         suggestions = result.get("suggested_queries", [])
 
-        # 4. Store in database
+        # 4. Save Schema Snapshot to HADIL Metadata DB
+        try:
+            from database.schema_extractor import extract_schema_snapshot
+            from services.metadata_service import metadata_service
+            snap = extract_schema_snapshot()
+            metadata_service.save_schema_snapshot(db_name, json.dumps(snap))
+        except Exception as snap_err:
+            logger.warning(f"Could not save metadata schema snapshot: {snap_err}")
+
+        # 5. Store legacy insight table (backwards compatibility)
         insight = models.HadilDatabaseInsight(
             database_name=db_name,
             generated_summary=summary,

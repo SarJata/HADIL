@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { 
   LayoutDashboard, Database, Table as TableIcon, TrendingUp, Pin, History, 
-  Clock, Sparkles, ChevronRight, Play, ChevronsLeft, ChevronsRight, Layers, ShieldCheck
+  Clock, Sparkles, ChevronRight, Play, ChevronsLeft, ChevronsRight, Layers, ShieldCheck, Users
 } from 'lucide-react';
 
 export default function SidebarNav({ 
@@ -13,7 +13,8 @@ export default function SidebarNav({
   recentQueries = [],
   onSelectQuery,
   onSelectTable,
-  isConnected = false
+  isConnected = false,
+  role = null
 }) {
   const dynamicTables = tables && tables.length > 0 ? tables : (dbInsights.tables || []);
   
@@ -271,6 +272,21 @@ export default function SidebarNav({
               <History className="w-4 h-4 text-slate-400 shrink-0" />
               {!isCollapsed && <span className="truncate">Recent Activity</span>}
             </button>
+
+            {role === 'ADMIN' && (
+              <button
+                onClick={() => onViewChange('user-management')}
+                title="User Management"
+                className={`w-full flex items-center gap-3 px-3.5 py-2 rounded-xl text-xs font-semibold transition-all ${
+                  currentView === 'user-management'
+                    ? 'bg-gradient-to-r from-purple-600/30 to-purple-600/10 border-l-2 border-purple-500 text-white font-bold'
+                    : 'text-slate-300 hover:bg-[#131A2B] hover:text-slate-100'
+                }`}
+              >
+                <Users className="w-4 h-4 text-purple-400 shrink-0" />
+                {!isCollapsed && <span className="truncate">User Management</span>}
+              </button>
+            )}
           </div>
         </div>
 

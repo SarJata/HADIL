@@ -9,10 +9,13 @@ export default function TopHeader({
   selectedDbId = '',
   currentDbName = '',
   dbError = null,
+  user = null,
+  role = null,
   onDbChange,
   onReconnect,
   onOpenSettings,
-  onOpenConnectModal
+  onOpenConnectModal,
+  onLogout
 }) {
   const [showNotifications, setShowNotifications] = useState(false);
 
@@ -22,6 +25,19 @@ export default function TopHeader({
   ];
 
   const isConnected = Boolean(selectedDbId && !dbError);
+
+  const getRoleBadgeStyle = (r) => {
+    switch (r) {
+      case 'ADMIN':
+        return 'bg-purple-950/80 border-purple-800 text-purple-300';
+      case 'EDITOR':
+        return 'bg-blue-950/80 border-blue-800 text-blue-300';
+      case 'VIEWER':
+        return 'bg-slate-900 border-slate-700 text-slate-300';
+      default:
+        return 'bg-amber-950/80 border-amber-800 text-amber-300';
+    }
+  };
 
   const handleSelectChange = (e) => {
     const val = e.target.value;
@@ -154,15 +170,32 @@ export default function TopHeader({
           <Settings className="w-4 h-4" />
         </button>
 
-        {/* User Profile */}
-        <div className="flex items-center gap-2.5 pl-3 border-l border-[#1F2A44]">
-          <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-blue-600 to-indigo-600 flex items-center justify-center font-black text-xs text-white shadow-md border border-blue-400/30">
-            DB
+        {/* Authenticated User Profile & Scoped Role */}
+        <div className="flex items-center gap-3 pl-3 border-l border-[#1F2A44]">
+          <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-blue-600 to-indigo-600 flex items-center justify-center font-black text-xs text-white shadow-md border border-blue-400/30 uppercase">
+            {user?.username ? user.username.substring(0, 2) : 'US'}
           </div>
           <div className="hidden lg:block text-left">
-            <p className="text-xs font-bold text-slate-100 leading-tight">Database Admin</p>
-            <p className="text-[10px] text-slate-400 font-medium">Grounding Layer</p>
+            <div className="flex items-center gap-1.5">
+              <p className="text-xs font-bold text-slate-100 leading-tight">
+                {user?.username || 'Authenticated User'}
+              </p>
+              <span className={`text-[9px] font-mono font-extrabold px-1.5 py-0.2 rounded border ${getRoleBadgeStyle(role)}`}>
+                {role || 'NO ROLE'}
+              </span>
+            </div>
+            <p className="text-[10px] text-slate-400 font-medium mt-0.5">
+              {selectedDbId ? `${selectedDbId}` : 'No Active DB'}
+            </p>
           </div>
+
+          <button
+            onClick={onLogout}
+            className="px-2.5 py-1.5 bg-[#131A2B] hover:bg-rose-950/60 text-slate-400 hover:text-rose-300 border border-[#1F2A44] hover:border-rose-800/80 rounded-xl text-[11px] font-bold transition-all cursor-pointer"
+            title="Sign Out"
+          >
+            Sign Out
+          </button>
         </div>
       </div>
     </header>

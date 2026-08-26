@@ -1,9 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import axios from 'axios';
+import api, { setAuthCallbacks } from './api';
 import { 
   Database, Table as TableIcon, TrendingUp, Sparkles, Pin, Clock, Play, 
   RefreshCw, LayoutDashboard, ShieldCheck, CheckCircle2, Search, Filter, 
-  Layers, AlertCircle, X, ArrowUpRight
+  Layers, AlertCircle, X, ArrowUpRight, Lock, Loader2
 } from 'lucide-react';
 
 import TopHeader from './components/TopHeader';
@@ -17,12 +17,20 @@ import CrudFormModal from './components/CrudFormModal';
 import SettingsModal from './components/SettingsModal';
 import NoDatabaseConnectedView from './components/NoDatabaseConnectedView';
 import ConnectDatabaseModal from './components/ConnectDatabaseModal';
-
-const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000';
-const API_URL = `${API_BASE}/api`;
+import LoginScreen from './components/LoginScreen';
+import UserManagementView from './components/UserManagementView';
 
 export default function App() {
-  // View Mode: 'overview' | 'pinned' | 'recent' | 'analytics-charts' | 'analytics-anomalies' | 'table_<tablename>'
+  // Authentication & Session State
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [user, setUser] = useState(null);
+  const [role, setRole] = useState(null);
+  const [permissions, setPermissions] = useState([]);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [authError, setAuthError] = useState(null);
+  const [forbiddenToast, setForbiddenToast] = useState(null);
+
+  // View Mode: 'overview' | 'pinned' | 'recent' | 'analytics-charts' | 'analytics-anomalies' | 'user-management' | 'table_<tablename>'
   const [currentView, setCurrentView] = useState('overview');
 
   // Pipeline Execution State
@@ -82,6 +90,31 @@ export default function App() {
 
   const isConnected = Boolean(selectedDbId && !dbError);
 
+  // Configure centralized API callbacks & validate session on startup
+  useEffect(() => {
+    setAuthCallbacks({
+      onUnauthorized: (msg) => {
+        setIsAuthenticated(false);
+        setUser(null);
+        setRole(null);
+        setPermissions([]);
+        setAuthError(msg || 'Session expired. Please sign in again.');
+      },
+      onForbidden: (msg) => {
+        setForbiddenToast(msg || 'Access Denied: You do not have permission to perform this action.');
+      }
+    });
+
+    validateSession();
+  }, []);
+
+  // Reset view if view is user-management but user is not admin
+  useEffect(() => {
+    if (currentView === 'user-management' && role !== 'ADMIN') {
+      setCurrentView('overview');
+    }
+  }, [role, currentView]);
+
   // Save pinned widgets to localStorage on change
   useEffect(() => {
     try {
@@ -91,25 +124,87 @@ export default function App() {
     }
   }, [pinnedWidgets]);
 
-  // Initial Data Load
   useEffect(() => {
-    fetchDatabases();
-    fetchHistory();
-  }, []);
-
-  useEffect(() => {
-    if (selectedDbId) {
+    if (isAuthenticated && selectedDbId) {
       fetchDbInsights();
       fetchTables();
     }
-  }, [selectedDbId]);
+  }, [selectedDbId, isAuthenticated]);
+
+  // Validate session against backend /auth/me
+  const validateSession = async () => {
+    const token = localStorage.getItem('hadil_jwt_token');
+    if (!token) {
+      setIsAuthenticated(false);
+      setAuthLoading(false);
+      return;
+    }
+
+    try {
+      setAuthLoading(true);
+      const meRes = await api.get('/auth/me');
+      setIsAuthenticated(true);
+      setUser({ id: meRes.data.user_id, username: meRes.data.username });
+      setRole(meRes.data.role);
+      setPermissions(meRes.data.permissions || []);
+      setAuthError(null);
+      await fetchDatabases();
+      await fetchHistory();
+    } catch (err) {
+      console.error("Session validation failed:", err);
+      localStorage.removeItem('hadil_jwt_token');
+      setIsAuthenticated(false);
+      setUser(null);
+      setRole(null);
+      setPermissions([]);
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  // Login handler
+  const handleLogin = async (username, password) => {
+    setAuthLoading(true);
+    setAuthError(null);
+    try {
+      const res = await api.post('/auth/login', { username, password });
+      const newToken = res.data.access_token;
+      localStorage.setItem('hadil_jwt_token', newToken);
+
+      // Fetch user profile and active database role
+      const meRes = await api.get('/auth/me');
+      setIsAuthenticated(true);
+      setUser({ id: meRes.data.user_id, username: meRes.data.username });
+      setRole(meRes.data.role);
+      setPermissions(meRes.data.permissions || []);
+
+      await fetchDatabases();
+      await fetchHistory();
+    } catch (err) {
+      const msg = err.response?.data?.detail || 'Invalid username or password.';
+      setAuthError(msg);
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  // Logout handler
+  const handleLogout = () => {
+    localStorage.removeItem('hadil_jwt_token');
+    setIsAuthenticated(false);
+    setUser(null);
+    setRole(null);
+    setPermissions([]);
+    setDatabases([]);
+    setSelectedDbId('');
+  };
 
   // API Call Handlers
   const fetchDatabases = async () => {
     try {
       const [listRes, currentRes] = await Promise.all([
-        axios.get(`${API_URL}/databases`),
-        axios.get(`${API_URL}/current-database`)
+        api.get('/databases'),
+        api.get('/current-database')
       ]);
       setDatabases(listRes.data || []);
       setSelectedDbId(currentRes.data?.id || '');
@@ -119,18 +214,28 @@ export default function App() {
       console.error("Failed to fetch databases", err);
       setDatabases([]);
       setSelectedDbId('');
-      setDbError("Unable to connect to server. Please check if backend is running.");
+      setDbError("Unable to connect to server. Please check backend.");
     }
   };
 
   const handleDbChange = async (dbId) => {
     try {
       setLoading(true);
-      const res = await axios.post(`${API_URL}/select-database`, { db_id: dbId });
+      // Temporarily clear role while switching database
+      setRole(null);
+      setPermissions([]);
+
+      const res = await api.post('/select-database', { db_id: dbId });
       if (res.data.success) {
         setSelectedDbId(dbId);
-        const currentRes = await axios.get(`${API_URL}/current-database`);
+        const currentRes = await api.get('/current-database');
         setCurrentDbName(currentRes.data?.name || dbId);
+
+        // Instantly retrieve effective role for newly selected database
+        const meRes = await api.get('/auth/me');
+        setRole(meRes.data.role);
+        setPermissions(meRes.data.permissions || []);
+
         fetchHistory();
         fetchDbInsights();
         fetchTables();
@@ -141,7 +246,8 @@ export default function App() {
         setExecutionError(null);
       }
     } catch (err) {
-      alert("Failed to switch database: " + (err.response?.data?.detail || err.message));
+      const errMsg = err.response?.data?.detail || err.message || "Failed to switch database";
+      alert("Failed to switch database: " + errMsg);
     } finally {
       setLoading(false);
     }
@@ -150,7 +256,10 @@ export default function App() {
   const handleConnectCustomDatabase = async (connectionUri, name) => {
     try {
       setLoading(true);
-      const res = await axios.post(`${API_URL}/connect-custom-db`, {
+      setRole(null);
+      setPermissions([]);
+
+      const res = await api.post('/connect-custom-db', {
         connection_uri: connectionUri,
         name: name
       });
@@ -158,6 +267,12 @@ export default function App() {
         setSelectedDbId(res.data.db_id);
         setCurrentDbName(name || res.data.db_id);
         setDbError(null);
+
+        // Instantly retrieve effective role for new custom database
+        const meRes = await api.get('/auth/me');
+        setRole(meRes.data.role);
+        setPermissions(meRes.data.permissions || []);
+
         await Promise.all([
           fetchDatabases(),
           fetchHistory(),
@@ -179,7 +294,7 @@ export default function App() {
 
   const fetchHistory = async () => {
     try {
-      const recent = await axios.get(`${API_URL}/queries/recent`);
+      const recent = await api.get('/queries/recent');
       setRecentQueries(recent.data || []);
     } catch (err) {
       console.error("Failed to fetch query history", err);
@@ -188,7 +303,7 @@ export default function App() {
 
   const fetchDbInsights = async () => {
     try {
-      const res = await axios.get(`${API_URL}/database-insights`);
+      const res = await api.get('/database-insights');
       setDbInsights(res.data || { summary: '', suggested_queries: [], tables: [] });
       if (res.data?.tables) {
         setTables(res.data.tables);
@@ -201,7 +316,7 @@ export default function App() {
 
   const fetchTables = async () => {
     try {
-      const res = await axios.get(`${API_URL}/schema/tables`);
+      const res = await api.get('/schema/tables');
       if (res.data?.tables) {
         setTables(res.data.tables);
       }
@@ -212,7 +327,7 @@ export default function App() {
 
   const fetchInsights = async (dataPayload, queryStr, sqlStr) => {
     try {
-      const res = await axios.post(`${API_URL}/generate-insights`, {
+      const res = await api.post('/generate-insights', {
         data: dataPayload,
         query: queryStr || query,
         sql: sqlStr || sql
@@ -228,7 +343,7 @@ export default function App() {
     setPredictLoading(true);
     setPrediction(null);
     try {
-      const res = await axios.post(`${API_URL}/predict-trend`, {
+      const res = await api.post('/predict-trend', {
         data: executionData,
         query: query,
         sql: sql
@@ -247,7 +362,7 @@ export default function App() {
     setExecutionData(null);
     setSuccessMessage('');
     try {
-      const res = await axios.post(`${API_URL}/queries/reuse`, { query_id: queryId });
+      const res = await api.post('/queries/reuse', { query_id: queryId });
       if (res.data.success) {
         setExecutionData(res.data.data);
         setSuggestedViz(res.data.suggested_visualization || 'table');
@@ -262,14 +377,17 @@ export default function App() {
         setExecutionError(res.data.error);
       }
     } catch (err) {
-      setExecutionError(err.response?.data?.detail || err.message);
+      if (err.response?.status === 403) {
+        setExecutionError("Access Denied: You do not have permission to execute this operation on this database.");
+      } else {
+        setExecutionError(err.response?.data?.detail || err.message);
+      }
     } finally {
       setLoading(false);
       fetchHistory();
     }
   };
 
-  // Select Table from Sidebar -> Run dynamic query preview
   const handleSelectTable = (tableName) => {
     setCurrentView(`table_${tableName}`);
     const tableQuery = `SELECT * FROM ${tableName} LIMIT 50`;
@@ -277,10 +395,13 @@ export default function App() {
     runPipeline(tableQuery);
   };
 
-  // Main Conversational Execution Pipeline
+  // Conversational Execution Pipeline
   const runPipeline = async (overrideQuery = null) => {
     const activeQuery = overrideQuery !== null ? overrideQuery : query;
     if (!activeQuery || !activeQuery.trim() || !selectedDbId) return;
+
+    // Clear input box after processing begins (success or failure)
+    setQuery('');
 
     setLoading(true);
     setSql('');
@@ -299,7 +420,7 @@ export default function App() {
 
     try {
       // 1. Mode Detection
-      const modeRes = await axios.post(`${API_URL}/detect-mode`, { query: activeQuery });
+      const modeRes = await api.post('/detect-mode', { query: activeQuery });
       const sqlMode = modeRes.data.mode === 'SQL';
       setIsSqlMode(sqlMode);
 
@@ -310,8 +431,8 @@ export default function App() {
         setSql(finalSql);
         setIntent('Direct SQL Execution');
       } else {
-        // Natural Language Pipeline
-        const intentRes = await axios.post(`${API_URL}/generate-form`, { query: activeQuery });
+        // Natural Language Pipeline -> Detect Intent
+        const intentRes = await api.post('/generate-form', { query: activeQuery });
         
         if (intentRes.data.operation === 'ERROR') {
           setExecutionError(intentRes.data.error);
@@ -329,7 +450,7 @@ export default function App() {
         }
 
         // Generate SQL
-        const genRes = await axios.post(`${API_URL}/generate-sql`, { query: activeQuery });
+        const genRes = await api.post('/generate-sql', { query: activeQuery });
         if (genRes.data.is_ambiguous) {
           setExecutionError(genRes.data.message);
           setLoading(false);
@@ -341,7 +462,7 @@ export default function App() {
         setIntent(genRes.data.intent);
 
         // Verify SQL
-        const verRes = await axios.post(`${API_URL}/verify-sql`, { query: activeQuery, sql: finalSql });
+        const verRes = await api.post('/verify-sql', { query: activeQuery, sql: finalSql });
         setVerification(verRes.data);
         if (!verRes.data.is_valid) {
           setLoading(false);
@@ -350,7 +471,7 @@ export default function App() {
       }
 
       // Safety Validation
-      const valRes = await axios.post(`${API_URL}/validate-sql?is_direct_sql=${sqlMode}`, { sql: finalSql });
+      const valRes = await api.post(`/validate-sql?is_direct_sql=${sqlMode}`, { sql: finalSql });
       setValidation(valRes.data);
       if (!valRes.data.is_safe) {
         setLoading(false);
@@ -358,7 +479,7 @@ export default function App() {
       }
 
       // Execute Query
-      const execRes = await axios.post(`${API_URL}/execute-query`, {
+      const execRes = await api.post('/execute-query', {
         sql: finalSql,
         natural_query: sqlMode ? null : activeQuery,
         is_direct_sql: sqlMode
@@ -376,8 +497,12 @@ export default function App() {
         setExecutionError(execRes.data.error);
       }
     } catch (err) {
-      setExecutionError(err.response?.data?.detail || err.message);
-    } font: {
+      if (err.response?.status === 403) {
+        setExecutionError("Access Denied: You do not have permission to execute this query on this database.");
+      } else {
+        setExecutionError(err.response?.data?.detail || err.message);
+      }
+    } finally {
       setLoading(false);
     }
   };
@@ -387,7 +512,7 @@ export default function App() {
     e.preventDefault();
     setLoading(true);
     try {
-      const res = await axios.post(`${API_URL}/execute-form`, {
+      const res = await api.post('/execute-form', {
         operation: crudData.operation,
         table: crudData.table,
         fields: formData,
@@ -398,10 +523,14 @@ export default function App() {
         setShowCrudModal(false);
         setQuery('');
       } else {
-        alert("Error: " + res.data.error);
+        setExecutionError("Error: " + res.data.error);
       }
     } catch (err) {
-      alert("Execution failed: " + (err.response?.data?.detail || err.message));
+      if (err.response?.status === 403) {
+        alert("Access Denied: You do not have permission to modify records in this database.");
+      } else {
+        alert("Execution failed: " + (err.response?.data?.detail || err.message));
+      }
     } finally {
       setLoading(false);
     }
@@ -413,7 +542,6 @@ export default function App() {
 
     const existingIndex = pinnedWidgets.findIndex(w => w.original_request === query || w.sql === sql);
     if (existingIndex >= 0) {
-      // Toggle unpin
       const updated = [...pinnedWidgets];
       updated.splice(existingIndex, 1);
       setPinnedWidgets(updated);
@@ -458,7 +586,7 @@ export default function App() {
     if (!target || !target.sql) return;
 
     try {
-      const execRes = await axios.post(`${API_URL}/execute-query`, {
+      const execRes = await api.post('/execute-query', {
         sql: target.sql,
         natural_query: target.original_request,
         is_direct_sql: false
@@ -467,7 +595,7 @@ export default function App() {
       if (execRes.data.success) {
         let freshInsights = [];
         try {
-          const insRes = await axios.post(`${API_URL}/generate-insights`, {
+          const insRes = await api.post('/generate-insights', {
             data: execRes.data.data,
             query: target.original_request,
             sql: target.sql
@@ -496,10 +624,28 @@ export default function App() {
   };
 
   const dbPinnedWidgets = pinnedWidgets.filter(w => w.data_source === selectedDbId);
-
   const isCurrentResultPinned = executionData && dbPinnedWidgets.some(
     w => w.original_request === query || w.sql === sql
   );
+
+  // If Auth initial validation loading
+  if (authLoading && !isAuthenticated) {
+    return (
+      <div className="min-h-screen bg-slate-950 flex items-center justify-center text-white font-sans">
+        <div className="flex flex-col items-center space-y-4">
+          <Loader2 className="w-10 h-10 text-blue-500 animate-spin" />
+          <p className="text-xs font-bold uppercase tracking-wider text-slate-400">
+            Validating HADIL Workspace Security Session...
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  // If NOT Authenticated -> Render HADIL Login Screen
+  if (!isAuthenticated) {
+    return <LoginScreen onLogin={handleLogin} loading={authLoading} authError={authError} />;
+  }
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 font-sans flex flex-col antialiased">
@@ -509,11 +655,30 @@ export default function App() {
         selectedDbId={selectedDbId}
         currentDbName={currentDbName}
         dbError={dbError}
+        user={user}
+        role={role}
         onDbChange={handleDbChange}
         onReconnect={fetchDatabases}
         onOpenSettings={() => setShowSettingsModal(true)}
         onOpenConnectModal={() => setIsConnectModalOpen(true)}
+        onLogout={handleLogout}
       />
+
+      {/* Global 403 Forbidden Toast Notification */}
+      {forbiddenToast && (
+        <div className="bg-rose-950/90 border-b border-rose-800 text-rose-200 px-6 py-3 text-xs font-bold flex items-center justify-between shadow-lg animate-in slide-in-from-top-2 duration-200 z-50">
+          <div className="flex items-center gap-3">
+            <Lock className="w-4 h-4 text-rose-400 shrink-0" />
+            <span>{forbiddenToast}</span>
+          </div>
+          <button
+            onClick={() => setForbiddenToast(null)}
+            className="p-1 hover:bg-rose-900 rounded text-rose-300 hover:text-white transition-colors"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
 
       <div className="flex-1 flex overflow-hidden">
         {/* Left Navigation Sidebar */}
@@ -527,16 +692,17 @@ export default function App() {
           onSelectQuery={reuseQuery}
           onSelectTable={handleSelectTable}
           isConnected={isConnected}
-          query={query}
-          setQuery={setQuery}
-          onRunQuery={runPipeline}
-          loading={loading}
+          role={role}
         />
 
         {/* Main Content Workspace */}
         <main className="flex-1 bg-[#0B0F19] overflow-y-auto p-8 space-y-8 custom-scrollbar">
-          {/* STATE 1: DATABASE NOT CONNECTED */}
-          {!isConnected ? (
+          
+          {/* VIEW MODE 1: USER MANAGEMENT (ADMIN ONLY) */}
+          {currentView === 'user-management' && role === 'ADMIN' ? (
+            <UserManagementView databases={databases} activeDbId={selectedDbId} currentUser={user} />
+          ) : !isConnected ? (
+            /* STATE 2: DATABASE NOT CONNECTED */
             <NoDatabaseConnectedView
               databases={databases}
               onSelectDatabase={handleDbChange}
@@ -544,15 +710,24 @@ export default function App() {
               onOpenConnectModal={() => setIsConnectModalOpen(true)}
             />
           ) : (
-            /* STATE 2: DATABASE CONNECTED */
+            /* STATE 3: DATABASE CONNECTED WORKSPACE */
             <>
               {/* TOP WORKSPACE WELCOME HEADER */}
               <div className="flex flex-wrap items-center justify-between gap-4 pb-2 border-b border-[#1F2A44]">
                 <div>
                   <div className="flex items-center gap-2">
                     <h2 className="text-2xl font-black text-white tracking-tight">
-                      Welcome back, Database Admin 👋
+                      Welcome back, {user?.username || 'User'} 👋
                     </h2>
+                    {role && (
+                      <span className={`text-[10px] font-mono font-extrabold px-2 py-0.5 rounded border uppercase ${
+                        role === 'ADMIN' ? 'bg-purple-950 text-purple-300 border-purple-800' :
+                        role === 'EDITOR' ? 'bg-blue-950 text-blue-300 border-blue-800' :
+                        'bg-slate-900 text-slate-300 border-slate-700'
+                      }`}>
+                        {role} Role
+                      </span>
+                    )}
                   </div>
                   <p className="text-xs text-slate-400 font-medium mt-1">
                     Here's what's happening with <strong className="text-slate-200">{currentDbName || selectedDbId}</strong>.
@@ -562,7 +737,7 @@ export default function App() {
                 <button
                   onClick={() => { fetchDbInsights(); fetchHistory(); }}
                   className="px-4 py-2 rounded-xl bg-[#131A2B] hover:bg-[#1A2340] text-slate-200 hover:text-white text-xs font-bold border border-[#1F2A44] flex items-center gap-2 transition-all cursor-pointer shadow-md"
-                  title="Refresh Ground Truth Metadata"
+                  title="Sync Ground Truth Metadata"
                 >
                   <RefreshCw className="w-3.5 h-3.5 text-blue-400" />
                   <span>Sync Metadata</span>
@@ -591,18 +766,18 @@ export default function App() {
                     badgeColor="emerald"
                   />
                   <KpiCard
-                    title="AI GROUNDING"
-                    value="Grounded"
-                    subtitle="0 hallucinations"
+                    title="ROLE SCOPE"
+                    value={role || 'VIEWER'}
+                    subtitle={`Scoped to ${selectedDbId}`}
                     change="Enforced"
                     changeType="positive"
-                    icon={Sparkles}
-                    badgeColor="purple"
+                    icon={ShieldCheck}
+                    badgeColor={role === 'ADMIN' ? 'purple' : role === 'EDITOR' ? 'blue' : 'rose'}
                   />
                   <KpiCard
                     title="SAFETY"
                     value="Enforced"
-                    subtitle="100% protected"
+                    subtitle="Server-side protected"
                     change="Secure"
                     changeType="positive"
                     icon={ShieldCheck}
@@ -730,7 +905,7 @@ export default function App() {
                               <button
                                 key={idx}
                                 onClick={() => setCurrentView(`table_${tableName}`)}
-                                className="w-full flex items-center justify-between p-2 rounded-xl bg-[#0F1626] hover:bg-[#1A2340] border border-[#1F2A44] text-left text-slate-300 hover:text-white transition-all group"
+                                className="w-full flex items-center justify-between p-2 rounded-xl bg-[#0F1626] hover:bg-[#1A2340] border border-[#1F2A44] text-left text-slate-300 hover:text-white transition-all group cursor-pointer"
                               >
                                 <span className="font-mono text-[11px] font-semibold truncate capitalize">{tableName}</span>
                                 <ArrowUpRight className="w-3 h-3 text-slate-500 group-hover:text-blue-400 transition-colors shrink-0" />
@@ -751,17 +926,17 @@ export default function App() {
                       <div>
                         <div className="flex items-center justify-between mb-3">
                           <div>
-                            <h4 className="text-sm font-bold text-slate-100">Grounding Status</h4>
-                            <p className="text-[10px] text-slate-400 font-medium">AI & RAG verification layer</p>
+                            <h4 className="text-sm font-bold text-slate-100">RBAC Security Status</h4>
+                            <p className="text-[10px] text-slate-400 font-medium">Active Database Role & Controls</p>
                           </div>
-                          <Sparkles className="w-4 h-4 text-purple-400" />
+                          <ShieldCheck className="w-4 h-4 text-purple-400" />
                         </div>
                         <div className="space-y-2 pt-1 text-xs">
                           {[
-                            { label: 'Schema Engine', val: 'Active', color: 'text-emerald-400' },
-                            { label: 'SQL Guardrails', val: 'Enforced', color: 'text-blue-400' },
-                            { label: 'AI RAG Layer', val: 'Grounded', color: 'text-purple-400' },
-                            { label: 'Driver Connection', val: 'Connected', color: 'text-cyan-400' }
+                            { label: 'Active User', val: user?.username || 'Guest', color: 'text-blue-400' },
+                            { label: 'Database Scope', val: selectedDbId || 'None', color: 'text-indigo-400' },
+                            { label: 'Effective Role', val: role || 'VIEWER', color: role === 'ADMIN' ? 'text-purple-400' : role === 'EDITOR' ? 'text-blue-400' : 'text-slate-300' },
+                            { label: 'Server Boundary', val: 'Protected (401/403)', color: 'text-emerald-400' }
                           ].map((item, idx) => (
                             <div key={idx} className="flex items-center justify-between p-2 rounded-xl bg-[#0F1626] border border-[#1F2A44]">
                               <span className="text-slate-400 text-[11px] font-medium">{item.label}</span>
@@ -790,7 +965,7 @@ export default function App() {
                               <button
                                 key={idx}
                                 onClick={() => { setQuery(prompt); runPipeline(prompt); }}
-                                className="w-full text-left p-2 rounded-xl bg-[#0F1626] hover:bg-[#1A2340] border border-[#1F2A44] text-slate-300 hover:text-white transition-all text-[11px] font-medium truncate flex items-center gap-1.5"
+                                className="w-full text-left p-2 rounded-xl bg-[#0F1626] hover:bg-[#1A2340] border border-[#1F2A44] text-slate-300 hover:text-white transition-all text-[11px] font-medium truncate flex items-center gap-1.5 cursor-pointer"
                               >
                                 <Play className="w-3 h-3 text-blue-400 shrink-0 fill-current" />
                                 <span className="truncate">{prompt}</span>
@@ -815,8 +990,8 @@ export default function App() {
                           {[
                             { title: 'Connection', status: 'OK' },
                             { title: 'Schema Cache', status: 'OK' },
-                            { title: 'Grounding Verification', status: 'OK' },
-                            { title: 'Security Inspection', status: 'OK' }
+                            { title: 'JWT Authentication', status: 'OK' },
+                            { title: 'RBAC Security Boundary', status: 'ACTIVE' }
                           ].map((item, idx) => (
                             <div key={idx} className="flex items-center justify-between p-2 rounded-xl bg-[#0F1626] border border-[#1F2A44]">
                               <div className="flex items-center gap-2">

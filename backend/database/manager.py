@@ -43,6 +43,19 @@ class DatabaseManager:
             self._engine = create_engine(url, connect_args=connect_args)
             self._SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=self._engine)
             logger.info(f"Initialized engine for database: {self.current_db_name or self.current_db_id}")
+            
+            # Register in HADIL Metadata DB
+            db_type = "sqlite" if url.startswith("sqlite") else self._engine.name
+            try:
+                from services.metadata_service import metadata_service
+                metadata_service.register_or_update_database(
+                    db_id=self.current_db_id,
+                    name=self.current_db_name or self.current_db_id,
+                    database_type=db_type,
+                    connection_uri=url if not url.startswith("sqlite") else None
+                )
+            except Exception as meta_err:
+                logger.warning(f"Could not sync active database to HADIL Metadata DB: {meta_err}")
         except Exception as e:
             logger.error(f"Failed to initialize engine: {e}")
             self._engine = None

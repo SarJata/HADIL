@@ -62,6 +62,23 @@ class SelectDatabaseRequest(BaseModel):
 class TestConnectionRequest(BaseModel):
     connection_uri: str
 
+from validators.security import create_access_token, get_current_user, enforce_permission, get_current_user_optional
+from services.metadata_service import metadata_service
+from database.metadata_db import verify_password
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+class CreateUserRequest(BaseModel):
+    username: str
+    password: str
+    role: Optional[str] = "VIEWER"
+
+class AssignRoleRequest(BaseModel):
+    user_id: int
+    role: str
+
 class CustomConnectionRequest(BaseModel):
     connection_uri: str
     name: Optional[str] = "Custom Database"
@@ -120,16 +137,50 @@ def suggest_visualization(data: List[Dict[str, Any]]) -> Dict[str, Any]:
     return {"type": "table", "metadata": metadata}
 
 @router.get("/databases")
-async def get_databases():
-    return db_manager.list_databases()
+async def get_databases(current_user: Optional[Dict[str, Any]] = Depends(get_current_user_optional)):
+    all_dbs = db_manager.list_databases()
+    if not current_user:
+        return all_dbs
+
+    username = current_user["username"]
+    user_id = int(current_user["sub"])
+
+    # Master admin sees all databases
+    if username == "admin":
+        return all_dbs
+
+    # Filter to databases where user has an assigned role
+    allowed_dbs = []
+    for db in all_dbs:
+        role = metadata_service.get_user_role_for_database(user_id, db["id"])
+        if role is not None:
+            allowed_dbs.append(db)
+    return allowed_dbs
 
 @router.post("/select-database")
-async def select_database(request: SelectDatabaseRequest):
+async def select_database(
+    request: SelectDatabaseRequest,
+    current_user: Dict[str, Any] = Depends(get_current_user)
+):
+    username = current_user["username"]
+    user_id = int(current_user["sub"])
+
+    # Enforce database access scoping for non-master users
+    if username != "admin":
+        role = metadata_service.get_user_role_for_database(user_id, request.db_id)
+        if not role:
+            raise HTTPException(
+                status_code=403,
+                detail=f"Access Denied: User '{username}' does not have access to database '{request.db_id}'."
+            )
+
     try:
         config = db_manager.set_database(request.db_id)
         models.Base.metadata.create_all(bind=db_manager.engine)
         onboarding_service.run_onboarding(request.db_id)
         return {"success": True, "message": f"Switched to {config['name']}", "db_id": request.db_id}
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to switch database: {e}")
         raise HTTPException(status_code=400, detail=str(e))
@@ -140,12 +191,22 @@ async def test_connection(request: TestConnectionRequest):
     return result
 
 @router.post("/connect-custom-db")
-async def connect_custom_db(request: CustomConnectionRequest):
+async def connect_custom_db(
+    request: CustomConnectionRequest,
+    current_user: Dict[str, Any] = Depends(get_current_user)
+):
+    if current_user["username"] != "admin":
+        raise HTTPException(
+            status_code=403,
+            detail="Access Denied: Only Master Super Admin ('admin') can connect or create new databases."
+        )
     try:
         config = db_manager.set_custom_connection(request.connection_uri, name=request.name)
         models.Base.metadata.create_all(bind=db_manager.engine)
         onboarding_service.run_onboarding(config["id"])
         return {"success": True, "message": f"Connected to {config['name']}", "db_id": config["id"]}
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to connect custom database: {e}")
         raise HTTPException(status_code=400, detail=str(e))
@@ -248,8 +309,107 @@ async def validate_sql_endpoint(request: ValidateRequest, is_direct_sql: bool = 
     logger.info(f"Validation Result: {result}")
     return result
 
+@router.post("/auth/login")
+async def login(request: LoginRequest):
+    user = metadata_service.get_user_by_username(request.username)
+    if not user or not verify_password(request.password, user.password_hash):
+        raise HTTPException(status_code=401, detail="Invalid username or password.")
+    token = create_access_token(user_id=user.id, username=user.username)
+    return {"access_token": token, "token_type": "bearer", "username": user.username, "user_id": user.id}
+
+@router.get("/auth/me")
+async def get_me(current_user: Dict[str, Any] = Depends(get_current_user)):
+    user_id = int(current_user["sub"])
+    username = current_user["username"]
+    active_db_id = db_manager.current_db_id
+    role = None
+    permissions = []
+    if active_db_id:
+        role = metadata_service.get_user_role_for_database(user_id, active_db_id)
+        if role == "ADMIN":
+            permissions = ["READ", "ADD", "UPDATE", "DELETE", "MANAGE_USERS"]
+        elif role == "EDITOR":
+            permissions = ["READ", "ADD", "UPDATE"]
+        elif role == "VIEWER":
+            permissions = ["READ"]
+    return {
+        "user_id": user_id,
+        "username": username,
+        "active_database_id": active_db_id,
+        "role": role,
+        "permissions": permissions
+    }
+
+@router.get("/users")
+async def list_users_endpoint(
+    current_user: Dict[str, Any] = Depends(enforce_permission("MANAGE_USERS"))
+):
+    users = metadata_service.list_users()
+    return users
+
+@router.post("/users/reset-and-seed")
+async def reset_and_seed_users_endpoint(
+    current_user: Dict[str, Any] = Depends(enforce_permission("MANAGE_USERS"))
+):
+    """
+    Deletes all users and creates dedicated separate ADMIN users for each database.
+    """
+    created = metadata_service.reset_and_seed_per_db_admins()
+    return {"success": True, "message": "All users reset. Dedicated DB admins created.", "users": created}
+
+@router.post("/users")
+async def create_user_endpoint(
+    request: CreateUserRequest,
+    current_user: Dict[str, Any] = Depends(enforce_permission("MANAGE_USERS"))
+):
+    try:
+        is_master = (current_user["username"] == "admin")
+        target_role = (request.role or "VIEWER").upper()
+
+        # Only Master Super Admin can create DB Admin accounts
+        if target_role == "ADMIN" and not is_master:
+            raise HTTPException(
+                status_code=403,
+                detail="Access Denied: Only Master Super Admin ('admin') can create or assign ADMIN roles."
+            )
+
+        new_user = metadata_service.create_user(request.username, request.password)
+        if db_manager.current_db_id and target_role:
+            metadata_service.assign_user_role(new_user.id, db_manager.current_db_id, target_role)
+        return {"success": True, "user_id": new_user.id, "username": new_user.username}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@router.post("/users/{user_id}/roles")
+async def assign_role_endpoint(
+    user_id: int,
+    request: AssignRoleRequest,
+    current_user: Dict[str, Any] = Depends(enforce_permission("MANAGE_USERS"))
+):
+    if not db_manager.current_db_id:
+        raise HTTPException(status_code=400, detail="No active database selected.")
+
+    is_master = (current_user["username"] == "admin")
+    target_role = request.role.upper()
+
+    # Only Master Super Admin can assign ADMIN roles
+    if target_role == "ADMIN" and not is_master:
+        raise HTTPException(
+            status_code=403,
+            detail="Access Denied: Only Master Super Admin ('admin') can assign ADMIN roles."
+        )
+
+    role_rec = metadata_service.assign_user_role(user_id, db_manager.current_db_id, target_role)
+    return {"success": True, "user_id": user_id, "database_id": db_manager.current_db_id, "role": role_rec.role}
+
 @router.post("/execute-query")
-async def execute_query(request: ExecuteRequest, db: Session = Depends(get_db)):
+async def execute_query(
+    request: ExecuteRequest, 
+    db: Session = Depends(get_db),
+    current_user: Dict[str, Any] = Depends(enforce_permission("READ"))
+):
     logger.info(f"--- Stage 4: Execution ---")
     logger.info(f"SQL for execution: {request.sql}")
     
@@ -305,6 +465,19 @@ async def execute_query(request: ExecuteRequest, db: Session = Depends(get_db)):
                 )
                 db.add(new_hist)
             db.commit()
+
+            # Dual-log to HADIL Metadata DB (scoped by active_database_id)
+            try:
+                from services.metadata_service import metadata_service
+                if db_manager.current_db_id:
+                    metadata_service.log_query_history(
+                        database_id=db_manager.current_db_id,
+                        query=request.natural_query or request.sql,
+                        operation="SELECT",
+                        status="SUCCESS"
+                    )
+            except Exception as meta_log_err:
+                logger.warning(f"Could not dual-log query to Metadata DB: {meta_log_err}")
 
         # Generate Follow-up Questions
         followup_suggestions = []
@@ -386,12 +559,40 @@ async def generate_form(request: QueryRequest):
     }
 
 @router.post("/execute-form")
-async def execute_form(request: CRUDExecuteRequest, db: Session = Depends(get_db)):
+async def execute_form(
+    request: CRUDExecuteRequest, 
+    db: Session = Depends(get_db),
+    current_user: Dict[str, Any] = Depends(get_current_user)
+):
     logger.info(f"--- CRUD Stage: Execution ---")
     operation = request.operation.upper()
     table = request.table
     fields = request.fields
     where = request.where or {}
+
+    # Map CRUD Operation to RBAC permission required
+    permission_map = {
+        "CREATE": "ADD",
+        "INSERT": "ADD",
+        "ADD": "ADD",
+        "UPDATE": "UPDATE",
+        "DELETE": "DELETE"
+    }
+    required_perm = permission_map.get(operation)
+    if not required_perm:
+        raise HTTPException(status_code=400, detail=f"Invalid CRUD operation '{operation}'.")
+
+    # Enforce RBAC permission dynamically based on operation
+    user_id = int(current_user["sub"])
+    active_db_id = db_manager.current_db_id
+    if not active_db_id:
+        raise HTTPException(status_code=400, detail="No active database selected.")
+
+    if not metadata_service.check_permission(user_id, active_db_id, required_perm):
+        raise HTTPException(
+            status_code=403, 
+            detail=f"Access Denied: User '{current_user['username']}' lacks '{required_perm}' permission for operation '{operation}' on active database '{active_db_id}'."
+        )
 
     try:
         if operation == "CREATE":
@@ -468,6 +669,17 @@ def startup():
             logger.error(f"Seeding failed: {e}")
         finally:
             db.close()
+
+        # Seed metadata per-DB admins if metadata user repository is uninitialized
+        try:
+            from database.metadata_db import metadata_manager, HadilUser
+            meta_db = metadata_manager.get_session()
+            if meta_db.query(HadilUser).count() == 0:
+                logger.info("Seeding dedicated per-database ADMIN accounts...")
+                metadata_service.reset_and_seed_per_db_admins()
+            meta_db.close()
+        except Exception as meta_seed_err:
+            logger.error(f"Metadata user seeding failed: {meta_seed_err}")
             
     except Exception as e:
         logger.error(f"Startup failed critical: {e}")

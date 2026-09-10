@@ -1,0 +1,5 @@
+# Windows desktop packaging extras. Not required to start HADIL on Render.
+# The Windows V1 PyInstaller build continues to use HADIL.spec / build.py.
+pyinstaller
+pillow
+pystray

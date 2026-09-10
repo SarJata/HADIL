@@ -1,0 +1,26 @@
+# HADIL cloud service on Render (native Python).
+# Does not use PyInstaller, HADIL.exe, splash, tray, or CLI mode.
+services:
+  - type: web
+    name: hadil
+    runtime: python
+    plan: starter
+    buildCommand: pip install -r requirements.txt && npm --prefix frontend ci && npm --prefix frontend run build
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12.8"
+      - key: PYTHONPATH
+        value: backend
+      - key: NODE_VERSION
+        value: "20.18.0"
+      - key: HADIL_DEPLOYMENT_MODE
+        value: cloud
+      - key: HADIL_DATA_DIR
+        value: /opt/render/project/src/.hadil
+      - key: HADIL_JWT_SECRET
+        sync: false
+      - key: HADIL_METADATA_DATABASE_URL
+        sync: false
+      - key: HADIL_ALLOWED_ORIGINS
+        sync: false

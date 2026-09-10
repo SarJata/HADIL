@@ -79,7 +79,10 @@ class DatabaseManager:
             return
 
         try:
-            self._engine = create_engine(url, connect_args=connect_args)
+            engine_kwargs = {"connect_args": connect_args}
+            if not url.startswith("sqlite"):
+                engine_kwargs["pool_pre_ping"] = True
+            self._engine = create_engine(url, **engine_kwargs)
             self._SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=self._engine)
             logger.info(f"Initialized engine for database: {self.current_db_name or self.current_db_id}")
 
@@ -106,9 +109,19 @@ class DatabaseManager:
         Attempts to connect to a database URI safely without exposing passwords.
         """
         try:
+            from config.deployment import get_deployment_config, is_sqlite_uri
+            cfg = get_deployment_config()
+            if cfg.is_cloud and is_sqlite_uri(connection_uri):
+                return {
+                    "success": False,
+                    "message": "Local SQLite connections are not available in cloud deployment mode. Use remote PostgreSQL or MySQL.",
+                }
             normalized_uri = normalize_db_uri(connection_uri)
             connect_args = {"check_same_thread": False} if normalized_uri.startswith("sqlite") else {}
-            temp_engine = create_engine(normalized_uri, connect_args=connect_args)
+            engine_kwargs = {"connect_args": connect_args}
+            if not normalized_uri.startswith("sqlite"):
+                engine_kwargs["pool_pre_ping"] = True
+            temp_engine = create_engine(normalized_uri, **engine_kwargs)
             with temp_engine.connect() as conn:
                 conn.execute(text("SELECT 1"))
             temp_engine.dispose()
@@ -132,6 +145,13 @@ class DatabaseManager:
         """
         Connects HADIL to a remote or custom SQLAlchemy database URI.
         """
+        from config.deployment import get_deployment_config, is_sqlite_uri
+        cfg = get_deployment_config()
+        if cfg.is_cloud and is_sqlite_uri(connection_uri):
+            raise ValueError(
+                "Local SQLite connections are not available in cloud deployment mode. Use remote PostgreSQL or MySQL."
+            )
+
         test_res = self.test_connection(connection_uri)
         if not test_res["success"]:
             raise ValueError(test_res["message"])

@@ -1,11 +1,14 @@
 import axios from 'axios';
 
 const getDynamicDefaultAddress = () => {
-  if (typeof window !== 'undefined' && window.location && window.location.origin && window.location.origin !== 'null') {
-    return window.location.origin;
-  }
-  if (import.meta.env.VITE_API_URL) {
+  if (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_API_URL) {
     return import.meta.env.VITE_API_URL;
+  }
+  if (typeof window !== 'undefined' && window.location && window.location.origin && window.location.origin !== 'null') {
+    const protocol = window.location.protocol;
+    if (protocol === 'http:' || protocol === 'https:') {
+      return window.location.origin;
+    }
   }
   return 'http://localhost:8000';
 };
@@ -198,4 +201,21 @@ export const updatePolicyConfig = async (threshold) => {
 };
 
 export default api;
+
+export const DEFAULT_DESKTOP_CAPABILITIES = {
+  deployment_mode: 'desktop',
+  sqlite_local: true,
+  sqlite_upload: true,
+  sqlite_file_location: true,
+  sqlite_directory_scan: true,
+  remote_mysql: true,
+  remote_postgresql: true,
+  server_shutdown: true,
+  windows_runtime: true,
+};
+
+export const fetchDeploymentCapabilities = async () => {
+  const response = await api.get('/capabilities');
+  return { ...DEFAULT_DESKTOP_CAPABILITIES, ...(response.data || {}) };
+};
 

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import api, { setAuthCallbacks } from './api';
+import api, { setAuthCallbacks, fetchDeploymentCapabilities, DEFAULT_DESKTOP_CAPABILITIES } from './api';
 import {
   Database, Table as TableIcon, TrendingUp, Sparkles, Pin, Clock, Play,
   RefreshCw, LayoutDashboard, ShieldCheck, CheckCircle2, Search, Filter,
@@ -91,6 +91,7 @@ export default function App() {
 
   // Settings Modal State
   const [showSettingsModal, setShowSettingsModal] = useState(false);
+  const [capabilities, setCapabilities] = useState(DEFAULT_DESKTOP_CAPABILITIES);
 
 
   // Persistent Pinned Widgets State
@@ -131,6 +132,9 @@ export default function App() {
     });
 
     checkSetupStatus();
+    fetchDeploymentCapabilities()
+      .then((caps) => setCapabilities(caps))
+      .catch(() => setCapabilities(DEFAULT_DESKTOP_CAPABILITIES));
   }, []);
 
   // Check whether first-time administrator setup is required
@@ -818,7 +822,7 @@ export default function App() {
         onOpenConnectModal={() => setIsConnectModalOpen(true)}
         onLogout={handleLogout}
         onNavigateOverview={() => setCurrentView('overview')}
-        onCloseServer={() => setShowShutdownConfirm(true)}
+        onCloseServer={capabilities.server_shutdown ? () => setShowShutdownConfirm(true) : null}
       />
 
 
@@ -862,7 +866,7 @@ export default function App() {
           {currentView === 'user-management' && (permissions.includes('MANAGE_USERS') || role === 'ADMIN' || role === 'MASTER_ADMIN') ? (
             <UserManagementView databases={databases} activeDbId={selectedDbId} currentUser={user} />
           ) : currentView === 'suadmin' && (permissions.includes('MANAGE_USERS') || role === 'ADMIN' || role === 'MASTER_ADMIN') ? (
-            <SuAdminView databases={databases} activeDbId={selectedDbId} />
+            <SuAdminView databases={databases} activeDbId={selectedDbId} capabilities={capabilities} />
           ) : currentView === 'policy-documents' ? (
             <PolicyManagementView activeDatabase={databases.find(d => d.id === selectedDbId)} userRole={role} />
           ) : !isConnected ? (
@@ -1277,6 +1281,7 @@ export default function App() {
         availableDatabases={databases}
         currentDbId={selectedDbId}
         userRole={role}
+        capabilities={capabilities}
       />
 
 

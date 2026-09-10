@@ -31,7 +31,7 @@ except ImportError:
 
 from services.metadata_service import metadata_service
 
-from utils.path_resolver import resolve_user_data_resource, resolve_bundled_resource
+from utils.path_resolver import resolve_user_data_resource, resolve_bundled_resource, get_user_data_dir
 
 # Configuration constants
 policy_storage_env = os.getenv("HADIL_POLICY_STORAGE_DIR")
@@ -49,6 +49,53 @@ EMBEDDING_MODEL_NAME = "all-MiniLM-L6-v2"
 EMBEDDING_DIM = 384
 DEFAULT_SIMILARITY_THRESHOLD = float(os.getenv("HADIL_POLICY_THRESHOLD", "0.65"))
 
+
+def _ensure_embedding_cache_env() -> str:
+    """
+    Cloud/Render: download weights into a writable cache. Windows: unused when
+    the bundled models/all-MiniLM-L6-v2 directory is present.
+    """
+    cache_dir = os.getenv("HADIL_EMBEDDING_CACHE_DIR")
+    if not cache_dir:
+        cache_dir = os.path.join(get_user_data_dir(), "models", "cache")
+    os.makedirs(cache_dir, exist_ok=True)
+    os.environ.setdefault("HF_HOME", cache_dir)
+    os.environ.setdefault("SENTENCE_TRANSFORMERS_HOME", cache_dir)
+    os.environ.setdefault("TRANSFORMERS_CACHE", cache_dir)
+    return cache_dir
+
+
+def resolve_embedding_model_source() -> dict:
+    """
+    Resolve MiniLM without committing model weights.
+
+    Priority:
+    1. HADIL_EMBEDDING_MODEL_PATH (explicit directory)
+    2. Bundled Windows/offline path models/all-MiniLM-L6-v2
+    3. Cached copy under HADIL_DATA_DIR/models/all-MiniLM-L6-v2
+    4. Hugging Face hub id (downloaded/cached at first use)
+    """
+    explicit = (os.getenv("HADIL_EMBEDDING_MODEL_PATH") or "").strip()
+    if explicit and os.path.exists(explicit):
+        return {"source": "explicit_path", "location": explicit, "hub_download": False}
+
+    bundled = resolve_bundled_resource(os.path.join("models", EMBEDDING_MODEL_NAME))
+    if os.path.exists(bundled):
+        return {"source": "bundled", "location": bundled, "hub_download": False}
+
+    cached_local = os.path.join(get_user_data_dir(), "models", EMBEDDING_MODEL_NAME)
+    if os.path.exists(cached_local):
+        return {"source": "local_cache", "location": cached_local, "hub_download": False}
+
+    cache_dir = _ensure_embedding_cache_env()
+    return {
+        "source": "huggingface_hub",
+        "location": EMBEDDING_MODEL_NAME,
+        "cache_dir": cache_dir,
+        "hub_download": True,
+    }
+
+
 class PolicyRAGService:
     def __init__(self):
         self.model = None
@@ -62,15 +109,23 @@ class PolicyRAGService:
         os.makedirs(INDEX_DIR, exist_ok=True)
 
     def _get_model(self):
-        if self.model is None and SentenceTransformer is not None:
-            # Check for bundled local offline model first
-            bundled_model_path = resolve_bundled_resource(os.path.join("models", EMBEDDING_MODEL_NAME))
-            if os.path.exists(bundled_model_path):
-                logger.info(f"[POLICY RAG] Loading offline bundled SentenceTransformer model from '{bundled_model_path}'...")
-                self.model = SentenceTransformer(bundled_model_path)
-            else:
-                logger.info(f"[POLICY RAG] Loading SentenceTransformer model '{EMBEDDING_MODEL_NAME}' from hub/cache...")
-                self.model = SentenceTransformer(EMBEDDING_MODEL_NAME)
+        if self.model is None:
+            if SentenceTransformer is None:
+                raise RuntimeError(
+                    "sentence-transformers is not installed; Policy RAG cannot load MiniLM."
+                )
+            resolved = resolve_embedding_model_source()
+            location = resolved["location"]
+            logger.info(
+                f"[POLICY RAG] Loading SentenceTransformer from {resolved['source']}: {location}"
+            )
+            try:
+                self.model = SentenceTransformer(location)
+            except Exception as exc:
+                raise RuntimeError(
+                    f"Failed to load embedding model '{EMBEDDING_MODEL_NAME}' "
+                    f"(source={resolved['source']}). RAG is required and was not disabled. {exc}"
+                ) from exc
         return self.model
 
 

@@ -1,5 +1,7 @@
 # HADIL backend runtime dependencies (Render-compatible).
 # Unpinned to match the existing project style; do not install from the local venv freeze.
+# Windows packaging extras live in backend/requirements-windows.txt and are not
+# required to start the cloud service.
 
 # API / server
 fastapi

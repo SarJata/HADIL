@@ -74,6 +74,7 @@ class SelectDatabaseRequest(BaseModel):
 class TestConnectionRequest(BaseModel):
     connection_uri: str
 
+from config.deployment import get_deployment_config, require_capability
 from validators.security import create_access_token, get_current_user, enforce_permission, get_current_user_optional, enforce_suadmin
 from services.metadata_service import metadata_service
 from pydantic import BaseModel, Field
@@ -195,7 +196,17 @@ def suggest_visualization(data: List[Dict[str, Any]]) -> Dict[str, Any]:
 
 @router.get("/health")
 async def api_health():
-    return {"status": "ok", "service": "HADIL", "api_version": "1.0"}
+    cfg = get_deployment_config()
+    return {
+        "status": "ok",
+        "service": "HADIL",
+        "api_version": "1.0",
+        "deployment_mode": cfg.mode,
+    }
+
+@router.get("/capabilities")
+async def api_capabilities():
+    return get_deployment_config().public_capabilities()
 
 @router.get("/setup/status")
 async def get_setup_status_endpoint():
@@ -1164,7 +1175,8 @@ class AddDirectoryRequest(BaseModel):
 @router.post("/admin/databases/register-path")
 def register_existing_sqlite_path(
     req: RegisterExistingSQLiteRequest,
-    current_user: dict = Depends(enforce_suadmin)
+    current_user: dict = Depends(enforce_suadmin),
+    _caps=Depends(require_capability("sqlite_file_location")),
 ):
     """
     SuAdmin-only endpoint to validate and register an existing SQLite database file
@@ -1197,7 +1209,8 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 async def upload_sqlite_database(
     file: UploadFile = File(...),
     display_name: Optional[str] = Form(None),
-    current_user: dict = Depends(enforce_suadmin)
+    current_user: dict = Depends(enforce_suadmin),
+    _caps=Depends(require_capability("sqlite_upload")),
 ):
 
     """
@@ -1275,7 +1288,8 @@ async def upload_sqlite_database(
 
 @router.post("/admin/server/shutdown")
 def shutdown_server_endpoint(
-    current_user: dict = Depends(enforce_suadmin)
+    current_user: dict = Depends(enforce_suadmin),
+    _caps=Depends(require_capability("server_shutdown")),
 ):
     """
     SuAdmin-only endpoint to trigger a graceful HADIL application server shutdown.
@@ -1293,7 +1307,8 @@ def shutdown_server_endpoint(
 # --- Admin Database Directory Management Endpoints ---
 @router.get("/admin/db-directories")
 def list_db_directories_endpoint(
-    current_user: dict = Depends(enforce_suadmin)
+    current_user: dict = Depends(enforce_suadmin),
+    _caps=Depends(require_capability("sqlite_directory_scan")),
 ):
 
     dirs = metadata_service.list_db_directories()
@@ -1302,7 +1317,8 @@ def list_db_directories_endpoint(
 @router.post("/admin/db-directories")
 def add_db_directory_endpoint(
     req: AddDirectoryRequest,
-    current_user: dict = Depends(enforce_suadmin)
+    current_user: dict = Depends(enforce_suadmin),
+    _caps=Depends(require_capability("sqlite_directory_scan")),
 ):
     if not req.path or not req.path.strip():
         raise HTTPException(status_code=400, detail="Directory path cannot be empty.")
@@ -1316,7 +1332,8 @@ def add_db_directory_endpoint(
 @router.delete("/admin/db-directories")
 def remove_db_directory_endpoint(
     path: str,
-    current_user: dict = Depends(enforce_suadmin)
+    current_user: dict = Depends(enforce_suadmin),
+    _caps=Depends(require_capability("sqlite_directory_scan")),
 ):
     if not path or not path.strip():
         raise HTTPException(status_code=400, detail="Directory path cannot be empty.")
@@ -1340,7 +1357,7 @@ def get_system_status_endpoint(
     from database.manager import db_manager
     from services.policy_rag_service import policy_rag_service, FAISS_INDEX_PATH
     
-    meta_db_ok = os.path.exists(metadata_manager.db_path)
+    meta_db_ok = metadata_manager.is_healthy()
     db_mgr_ok = db_manager is not None
     rag_ok = policy_rag_service.is_initialized
     faiss_ok = os.path.exists(FAISS_INDEX_PATH)

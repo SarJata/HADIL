@@ -38,11 +38,24 @@ _log_diag("BOOT", "Calling multiprocessing.freeze_support()")
 multiprocessing.freeze_support()
 _log_diag("BOOT", "multiprocessing.freeze_support() returned")
 
+def _is_cloud_startup() -> bool:
+    mode = (os.getenv("HADIL_DEPLOYMENT_MODE") or "").strip().lower()
+    if mode == "cloud":
+        return True
+    if mode == "desktop":
+        return False
+    return bool(os.getenv("RENDER"))
+
 # Early Native Splash Launch for Packaged Desktop GUI Mode
 # Must launch before heavy application / AI / ML module imports
 _splash_instance = None
-if multiprocessing.current_process().name == 'MainProcess' and sys.platform == 'win32':
-    if "--cli" not in sys.argv and "--admin" not in sys.argv and not os.getenv("RENDER") and not os.getenv("HADIL_CLOUD_MODE") and "pytest" not in sys.modules and not any("pytest" in arg for arg in sys.argv):
+if multiprocessing.current_process().name == 'MainProcess' and sys.platform == 'win32' and not _is_cloud_startup():
+    running_tests = (
+        "pytest" in sys.modules
+        or "unittest" in sys.modules
+        or any("pytest" in arg or "unittest" in arg for arg in sys.argv)
+    )
+    if "--cli" not in sys.argv and "--admin" not in sys.argv and not running_tests:
 
         try:
             current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -62,8 +75,6 @@ import socket
 import webbrowser
 import uvicorn
 from typing import Optional
-
-from PIL import Image, ImageDraw
 
 # Ensure parent directory is in sys.path
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -217,6 +228,7 @@ def configure_logging(cli_mode: bool):
 
 def create_tray_icon_image():
     """Generates an emerald HADIL icon for system tray if image asset is not on disk."""
+    from PIL import Image, ImageDraw
     width = 64
     height = 64
     image = Image.new("RGBA", (width, height), (15, 22, 38, 255))
@@ -356,8 +368,10 @@ class HadilRuntime:
         configure_logging(cli_mode=cli_mode)
         _log_diag("START 3", "After configure_logging()")
 
-        from utils.native_splash import get_global_splash
-        active_splash = get_global_splash()
+        active_splash = None
+        if not _is_cloud_startup():
+            from utils.native_splash import get_global_splash
+            active_splash = get_global_splash()
 
         if cli_mode and active_splash:
             active_splash.close()
@@ -472,6 +486,17 @@ class HadilRuntime:
 
 def main():
     _log_diag("BOOT", "main() function entered")
+    if _is_cloud_startup():
+        from config.deployment import get_deployment_config
+        cfg = get_deployment_config()
+        cfg.validate_cloud_runtime()
+        uvicorn.run(
+            app,
+            host=cfg.bind_host,
+            port=cfg.bind_port,
+            log_level="info",
+        )
+        return
     cli_mode = ("--cli" in sys.argv or "--admin" in sys.argv)
     host = os.getenv("HOST", "127.0.0.1")
     runtime = HadilRuntime(host=host)

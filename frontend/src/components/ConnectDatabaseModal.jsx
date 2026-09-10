@@ -3,7 +3,7 @@ import {
   Database, Server, CheckCircle2, XCircle, Loader2, Sparkles, X, 
   HardDrive, Key, Globe, ArrowRight, ShieldCheck, Upload, FolderPlus, FileCode
 } from 'lucide-react';
-import api from '../api';
+import api, { DEFAULT_DESKTOP_CAPABILITIES } from '../api';
 
 const DB_TEMPLATES = {
   postgresql: {
@@ -40,11 +40,18 @@ export default function ConnectDatabaseModal({
   onConnectCustomDatabase,
   availableDatabases = [],
   currentDbId = '',
-  userRole = ''
+  userRole = '',
+  capabilities = DEFAULT_DESKTOP_CAPABILITIES
 }) {
   const isSuAdmin = userRole === 'MASTER_ADMIN';
+  const allowSqliteImport = Boolean(
+    isSuAdmin && (capabilities.sqlite_upload || capabilities.sqlite_file_location)
+  );
+  const remoteTemplates = Object.fromEntries(
+    Object.entries(DB_TEMPLATES).filter(([key]) => key !== 'sqlite' || capabilities.sqlite_local)
+  );
 
-  const [activeTab, setActiveTab] = useState('local'); // 'local' | 'import' | 'remote'
+  const [activeTab, setActiveTab] = useState(capabilities.sqlite_local ? 'local' : 'remote'); // 'local' | 'import' | 'remote'
   const [selectedLocalDb, setSelectedLocalDb] = useState(currentDbId || '');
   
   // SuAdmin SQLite Import State
@@ -90,13 +97,8 @@ export default function ConnectDatabaseModal({
     setErrorMsg(null);
 
     try {
-      const res = await fetch('/api/test-connection', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ connection_uri: connectionUri.trim() })
-      });
-      const data = await res.json();
-      setTestResult(data);
+      const res = await api.post('/test-connection', { connection_uri: connectionUri.trim() });
+      setTestResult(res.data);
     } catch (err) {
       setTestResult({ success: false, message: 'Network error while testing connection.' });
     } finally {
@@ -241,7 +243,7 @@ export default function ConnectDatabaseModal({
             <span>Registered Databases</span>
           </button>
 
-          {isSuAdmin && (
+          {allowSqliteImport && (
             <button
               onClick={() => { setActiveTab('import'); setErrorMsg(null); setImportStatusMsg(null); }}
               className={`flex-1 py-3 px-3 text-xs font-bold flex items-center justify-center gap-2 border-b-2 transition-all ${
@@ -332,13 +334,14 @@ export default function ConnectDatabaseModal({
           )}
 
           {/* TAB 2: SUADMIN SQLITE IMPORT */}
-          {activeTab === 'import' && isSuAdmin && (
+          {activeTab === 'import' && allowSqliteImport && (
             <div className="space-y-4">
               <div>
                 <label className="text-xs font-bold text-slate-300 block mb-2 uppercase tracking-wider">
                   Add Method
                 </label>
-                <div className="grid grid-cols-2 gap-3">
+                <div className={`grid gap-3 ${capabilities.sqlite_file_location && capabilities.sqlite_upload ? 'grid-cols-2' : 'grid-cols-1'}`}>
+                  {capabilities.sqlite_file_location && (
                   <button
                     onClick={() => { setImportMethod('path'); setImportStatusMsg(null); }}
                     className={`p-3 rounded-xl border text-xs font-bold flex items-center justify-center gap-2 transition-all ${
@@ -350,7 +353,9 @@ export default function ConnectDatabaseModal({
                     <FolderPlus className="w-4 h-4" />
                     <span>Existing File Location</span>
                   </button>
+                  )}
 
+                  {capabilities.sqlite_upload && (
                   <button
                     onClick={() => { setImportMethod('upload'); setImportStatusMsg(null); }}
                     className={`p-3 rounded-xl border text-xs font-bold flex items-center justify-center gap-2 transition-all ${
@@ -362,6 +367,7 @@ export default function ConnectDatabaseModal({
                     <Upload className="w-4 h-4" />
                     <span>Upload Database File</span>
                   </button>
+                  )}
                 </div>
               </div>
 
@@ -379,7 +385,7 @@ export default function ConnectDatabaseModal({
               </div>
 
               {/* Method 1: Existing File Path */}
-              {importMethod === 'path' && (
+              {importMethod === 'path' && capabilities.sqlite_file_location && (
                 <div className="space-y-2">
                   <label className="text-xs font-bold text-slate-300 block uppercase tracking-wider">
                     Server File Path
@@ -398,7 +404,7 @@ export default function ConnectDatabaseModal({
               )}
 
               {/* Method 2: File Upload */}
-              {importMethod === 'upload' && (
+              {importMethod === 'upload' && capabilities.sqlite_upload && (
                 <div className="space-y-2">
                   <label className="text-xs font-bold text-slate-300 block uppercase tracking-wider">
                     Select Local SQLite File (.db, .sqlite, .sqlite3)
@@ -472,7 +478,7 @@ export default function ConnectDatabaseModal({
                   Database Type
                 </label>
                 <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
-                  {Object.entries(DB_TEMPLATES).map(([key, item]) => (
+                  {Object.entries(remoteTemplates).map(([key, item]) => (
                     <button
                       key={key}
                       onClick={() => setDbType(key)}

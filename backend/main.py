@@ -1,33 +1,23 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from contextlib import asynccontextmanager
 from dotenv import load_dotenv
 import os
 
 load_dotenv()
 
+from config.deployment import get_deployment_config
 from routes import api
 
-app = FastAPI(title="HADIL \u2014 AI-Safe Database Query Execution Layer")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    get_deployment_config().validate_cloud_runtime()
+    yield
+
+app = FastAPI(title="HADIL \u2014 AI-Safe Database Query Execution Layer", lifespan=lifespan)
 
 def get_allowed_origins():
-    # Base default origins for local development and production single-origin HADIL.exe
-    default_origins = [
-        "http://localhost:5173", "http://localhost:3000",
-        "http://127.0.0.1:5173", "http://127.0.0.1:3000",
-        "http://localhost:8000", "http://127.0.0.1:8000"
-    ]
-    
-    # Merge custom origins from HADIL_ALLOWED_ORIGINS or ALLOWED_ORIGINS
-    env_origins_str = os.getenv("HADIL_ALLOWED_ORIGINS") or os.getenv("ALLOWED_ORIGINS", "")
-    origins = list(default_origins)
-    
-    if env_origins_str:
-        for o in env_origins_str.split(","):
-            cleaned = o.strip().rstrip("/")
-            if cleaned and cleaned not in origins:
-                origins.append(cleaned)
-                
-    return origins
+    return get_deployment_config().cors_origins()
 
 ALLOWED_ORIGINS = get_allowed_origins()
 
@@ -47,7 +37,12 @@ app.add_middleware(
 
 @app.get("/health")
 def health_check():
-    return {"status": "ok", "service": "HADIL"}
+    cfg = get_deployment_config()
+    return {
+        "status": "ok",
+        "service": "HADIL",
+        "deployment_mode": cfg.mode,
+    }
 
 app.include_router(api.router, prefix="/api")
 
@@ -77,5 +72,7 @@ if os.path.exists(static_dist_path):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+    cfg = get_deployment_config()
+    host = cfg.bind_host if cfg.is_cloud else "0.0.0.0"
+    uvicorn.run("main:app", host=host, port=cfg.bind_port, reload=cfg.is_desktop)
 

@@ -190,39 +190,93 @@ def verify_password(password: str, hashed: str) -> bool:
         return False
 
 
+def normalize_metadata_database_url(url: str) -> str:
+    """Accept postgres://, postgresql://, and postgresql+psycopg2:// forms."""
+    cleaned = (url or "").strip()
+    if cleaned.startswith("postgres://"):
+        return "postgresql+psycopg2://" + cleaned[len("postgres://"):]
+    if cleaned.startswith("postgresql://"):
+        return "postgresql+psycopg2://" + cleaned[len("postgresql://"):]
+    return cleaned
+
+
 class MetadataDatabaseManager:
     """
-    Manages the standalone HADIL Metadata Database (hadil_metadata.db).
+    Manages the standalone HADIL Metadata Database.
+
+    Desktop default: local SQLite file (hadil_metadata.db).
+    Cloud: PostgreSQL/Supabase via HADIL_METADATA_DATABASE_URL.
     """
-    def __init__(self, db_path: str = "./hadil_metadata.db"):
+    def __init__(self, db_path: str = "./hadil_metadata.db", database_url: str = None):
         self.db_path = db_path
-        self.engine = create_engine(f"sqlite:///{self.db_path}", connect_args={"check_same_thread": False})
+        self.database_url = normalize_metadata_database_url(database_url) if database_url else None
+        self.engine = self._create_engine()
         self._SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=self.engine)
         self.init_db()
 
+    def _create_engine(self):
+        if self.database_url:
+            pool_mode = (os.getenv("HADIL_METADATA_POOL_MODE") or "default").strip().lower()
+            engine_kwargs = {"pool_pre_ping": True}
+            if pool_mode in ("null", "none", "disabled"):
+                from sqlalchemy.pool import NullPool
+                engine_kwargs["poolclass"] = NullPool
+            else:
+                engine_kwargs["pool_size"] = int(os.getenv("HADIL_METADATA_POOL_SIZE", "5"))
+                engine_kwargs["max_overflow"] = int(os.getenv("HADIL_METADATA_MAX_OVERFLOW", "5"))
+            return create_engine(self.database_url, **engine_kwargs)
+        return create_engine(
+            f"sqlite:///{self.db_path}",
+            connect_args={"check_same_thread": False},
+        )
+
     def init_db(self):
         MetadataBase.metadata.create_all(bind=self.engine)
-        # Migration: Ensure connection_uri_encrypted column exists on hadil_databases table
+        self._ensure_column("hadil_databases", "connection_uri_encrypted", "TEXT")
+
+    def _ensure_column(self, table_name: str, column_name: str, column_type: str):
+        """Dialect-safe additive migration used by both SQLite and PostgreSQL."""
         try:
+            from sqlalchemy import inspect as sa_inspect
+            inspector = sa_inspect(self.engine)
+            existing = {col["name"] for col in inspector.get_columns(table_name)}
+            if column_name in existing:
+                return
             with self.engine.connect() as conn:
-                conn.execute(text("ALTER TABLE hadil_databases ADD COLUMN connection_uri_encrypted TEXT"))
+                conn.execute(text(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type}"))
                 conn.commit()
         except Exception:
             pass
 
+    def is_healthy(self) -> bool:
+        try:
+            with self.engine.connect() as conn:
+                conn.execute(text("SELECT 1"))
+            return True
+        except Exception:
+            return False
+
+    @property
+    def dialect_name(self) -> str:
+        return getattr(self.engine.dialect, "name", "sqlite")
 
     def get_session(self) -> Session:
         return self._SessionLocal()
 
 from utils.path_resolver import resolve_user_data_resource
 
-metadata_db_env = os.getenv("HADIL_METADATA_DB")
-if metadata_db_env:
-    metadata_db_path = os.path.abspath(metadata_db_env)
-else:
-    metadata_db_path = resolve_user_data_resource("hadil_metadata.db")
+def _build_default_metadata_manager() -> MetadataDatabaseManager:
+    database_url = os.getenv("HADIL_METADATA_DATABASE_URL")
+    if database_url:
+        return MetadataDatabaseManager(database_url=database_url)
+    metadata_db_env = os.getenv("HADIL_METADATA_DB")
+    if metadata_db_env:
+        metadata_db_path = os.path.abspath(metadata_db_env)
+    else:
+        metadata_db_path = resolve_user_data_resource("hadil_metadata.db")
+    return MetadataDatabaseManager(db_path=metadata_db_path)
 
-metadata_manager = MetadataDatabaseManager(db_path=metadata_db_path)
+metadata_manager = _build_default_metadata_manager()
 
 
 def get_metadata_db():

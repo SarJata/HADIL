@@ -5,8 +5,8 @@ import {
 } from 'lucide-react';
 import api from '../api';
 
-export default function SuAdminView({ databases = [], activeDbId = '' }) {
-  const [activeTab, setActiveTab] = useState('directories');
+export default function SuAdminView({ databases = [], activeDbId = '', capabilities = { sqlite_directory_scan: true } }) {
+  const [activeTab, setActiveTab] = useState(capabilities.sqlite_directory_scan ? 'directories' : 'diagnostics');
   
   // Database Directories State
   const [directories, setDirectories] = useState([]);
@@ -37,7 +37,7 @@ export default function SuAdminView({ databases = [], activeDbId = '' }) {
       setDirectories(res.data?.directories || []);
     } catch (err) {
       setError(err.response?.data?.detail || err.message || 'Failed to fetch DB directories.');
-    } fontFinally: {
+    } finally {
       setDirLoading(false);
     }
   };
@@ -116,6 +116,7 @@ export default function SuAdminView({ databases = [], activeDbId = '' }) {
 
         {/* Section Tabs */}
         <div className="flex items-center gap-2 bg-[#131A2B] border border-[#1F2A44] p-1 rounded-xl">
+          {capabilities.sqlite_directory_scan && (
           <button
             onClick={() => setActiveTab('directories')}
             className={`px-4 py-2 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-2 ${
@@ -127,6 +128,7 @@ export default function SuAdminView({ databases = [], activeDbId = '' }) {
             <Folder className="w-3.5 h-3.5" />
             <span>DB Directories</span>
           </button>
+          )}
 
           <button
             onClick={() => setActiveTab('diagnostics')}
@@ -168,7 +170,7 @@ export default function SuAdminView({ databases = [], activeDbId = '' }) {
       )}
 
       {/* TAB 1: DATABASE DIRECTORY DISCOVERY MANAGEMENT */}
-      {activeTab === 'directories' && (
+      {activeTab === 'directories' && capabilities.sqlite_directory_scan && (
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
           {/* Add Directory Form Card */}
           <div className="bg-[#131A2B] border border-[#1F2A44] rounded-2xl p-6 space-y-4 shadow-xl">
@@ -321,7 +323,7 @@ export default function SuAdminView({ databases = [], activeDbId = '' }) {
                     {systemDiagnostics.metadata_db_status}
                   </span>
                 </div>
-                <p className="text-[11px] text-slate-400">Persistent SQLite store for users, RBAC, & settings.</p>
+                <p className="text-[11px] text-slate-400">Persistent store for users, RBAC, and settings.</p>
               </div>
 
               {/* Card 3: Database Manager */}

@@ -1,12 +1,14 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { 
   LayoutDashboard, Database, Table as TableIcon, TrendingUp, Pin, History, 
-  Clock, Sparkles, ChevronRight, Play, ChevronsLeft, ChevronsRight, Layers, ShieldCheck, Users
+  Clock, Sparkles, ChevronRight, Play, ChevronsLeft, ChevronsRight, Layers, ShieldCheck, Users, Cpu, Settings, FileText
 } from 'lucide-react';
+
 
 export default function SidebarNav({ 
   currentView, 
   onViewChange,
+  onOpenSettings,
   pinnedCount = 0,
   dbInsights = {},
   tables = [],
@@ -14,8 +16,11 @@ export default function SidebarNav({
   onSelectQuery,
   onSelectTable,
   isConnected = false,
-  role = null
+  role = null,
+  permissions = []
 }) {
+  const canManageUsers = permissions.includes('MANAGE_USERS') || role === 'ADMIN' || role === 'MASTER_ADMIN';
+  const canConfigureProviders = role === 'ADMIN' || role === 'MASTER_ADMIN';
   const dynamicTables = tables && tables.length > 0 ? tables : (dbInsights.tables || []);
   
   // Customisable Sidebar Width State
@@ -26,6 +31,7 @@ export default function SidebarNav({
 
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [isResizing, setIsResizing] = useState(false);
+  const [isAnalysisExpanded, setIsAnalysisExpanded] = useState(false);
   const sidebarRef = useRef(null);
 
   useEffect(() => {
@@ -81,10 +87,10 @@ export default function SidebarNav({
           onDoubleClick={handleDoubleClickReset}
           title="Drag to resize sidebar width (Double-click to reset)"
           className={`absolute right-0 top-0 bottom-0 w-2 cursor-col-resize z-30 transition-colors flex items-center justify-center ${
-            isResizing ? 'bg-blue-600' : 'hover:bg-blue-500/40 bg-transparent'
+            isResizing ? 'bg-emerald-600' : 'hover:bg-emerald-500/40 bg-transparent'
           }`}
         >
-          <div className={`w-0.5 h-8 rounded-full ${isResizing ? 'bg-white' : 'bg-slate-700 hover:bg-blue-400'}`} />
+          <div className={`w-0.5 h-8 rounded-full ${isResizing ? 'bg-white' : 'bg-slate-700 hover:bg-emerald-400'}`} />
         </div>
       )}
 
@@ -94,11 +100,11 @@ export default function SidebarNav({
         {/* COMPACT DB ANALYSIS SIDEBAR CARD (POSITIONS ABOVE MENU) */}
         {!isCollapsed && (
           isConnected ? (
-            <div className="bg-[#131A2B] border border-[#1F2A44] rounded-2xl p-4 space-y-2 shadow-lg min-w-0">
+            <div className="bg-[#131A2B] border border-[#1F2A44] rounded-2xl p-4 space-y-2.5 shadow-lg min-w-0">
               <div className="flex items-center justify-between gap-1">
                 <div className="flex items-center gap-1.5 truncate">
-                  <Sparkles className="w-3.5 h-3.5 text-blue-400 fill-current shrink-0" />
-                  <span className="font-extrabold text-blue-400 uppercase tracking-wider text-[10px] truncate">
+                  <Sparkles className="w-3.5 h-3.5 text-emerald-400 fill-current shrink-0" />
+                  <span className="font-extrabold text-emerald-400 uppercase tracking-wider text-[10px] truncate">
                     DB ANALYSIS
                   </span>
                 </div>
@@ -108,9 +114,21 @@ export default function SidebarNav({
               </div>
 
               {dbInsights.summary ? (
-                <p className="text-[11px] text-slate-300 italic leading-relaxed font-medium line-clamp-3">
-                  "{dbInsights.summary}"
-                </p>
+                <div className="space-y-1">
+                  <p className={`text-[11px] text-slate-300 italic leading-relaxed font-medium transition-all ${
+                    isAnalysisExpanded ? '' : 'line-clamp-3'
+                  }`}>
+                    "{dbInsights.summary}"
+                  </p>
+                  {dbInsights.summary.length > 120 && (
+                    <button
+                      onClick={() => setIsAnalysisExpanded(!isAnalysisExpanded)}
+                      className="text-[10px] font-mono font-semibold text-emerald-400 hover:text-emerald-300 hover:underline transition-colors block cursor-pointer"
+                    >
+                      {isAnalysisExpanded ? "Show less" : "View more"}
+                    </button>
+                  )}
+                </div>
               ) : (
                 <p className="text-[11px] text-slate-400 italic leading-relaxed">
                   Database schema inspected and grounded.
@@ -118,15 +136,19 @@ export default function SidebarNav({
               )}
 
               {/* Compact Metadata Row */}
-              <div className="flex flex-wrap items-center gap-1.5 pt-1.5 border-t border-[#1F2A44]/80 text-[10px] font-mono">
+              <div className="flex flex-wrap items-center gap-1.5 pt-2 border-t border-[#1F2A44]/80 text-[10px] font-mono">
                 <span className="bg-[#0F1626] border border-[#1F2A44] px-2 py-0.5 rounded-md text-slate-300 font-semibold">
-                  {dynamicTables.length} Tables
+                  {dbInsights.stats?.table_count ?? dynamicTables.length} Tables
                 </span>
-                <span className="bg-[#0F1626] border border-[#1F2A44] px-2 py-0.5 rounded-md text-purple-300 font-semibold">
-                  82 Relations
+                <span className="bg-[#0F1626] border border-[#1F2A44] px-2 py-0.5 rounded-md text-teal-300 font-semibold">
+                  {dbInsights.stats?.relation_count ?? 0} Relations
                 </span>
                 <span className="bg-[#0F1626] border border-[#1F2A44] px-2 py-0.5 rounded-md text-emerald-300 font-semibold">
-                  3.5K Records
+                  {dbInsights.stats?.record_count !== undefined 
+                    ? (dbInsights.stats.record_count >= 1000 
+                        ? `${(dbInsights.stats.record_count / 1000).toFixed(1)}K Records` 
+                        : `${dbInsights.stats.record_count} Records`)
+                    : '0 Records'}
                 </span>
               </div>
             </div>
@@ -154,11 +176,11 @@ export default function SidebarNav({
             title="Overview"
             className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs font-bold transition-all ${
               currentView === 'overview'
-                ? 'bg-gradient-to-r from-blue-600/30 to-blue-600/10 border-l-2 border-blue-500 text-white'
+                ? 'bg-gradient-to-r from-emerald-600/30 to-emerald-600/10 border-l-2 border-emerald-500 text-white'
                 : 'text-slate-400 hover:bg-[#131A2B] hover:text-slate-100'
             }`}
           >
-            <LayoutDashboard className={`w-4 h-4 shrink-0 ${currentView === 'overview' ? 'text-blue-400' : 'text-slate-400'}`} />
+            <LayoutDashboard className={`w-4 h-4 shrink-0 ${currentView === 'overview' ? 'text-emerald-400' : 'text-slate-400'}`} />
             {!isCollapsed && <span>Overview</span>}
           </button>
         </div>
@@ -181,15 +203,15 @@ export default function SidebarNav({
                   title={table}
                   className={`w-full flex items-center justify-between px-3.5 py-2 rounded-xl text-xs font-semibold transition-all ${
                     isActive
-                      ? 'bg-gradient-to-r from-blue-600/30 to-blue-600/10 border-l-2 border-blue-500 text-white font-bold'
+                      ? 'bg-gradient-to-r from-emerald-600/30 to-emerald-600/10 border-l-2 border-emerald-500 text-white font-bold'
                       : 'text-slate-300 hover:bg-[#131A2B] hover:text-slate-100'
                   }`}
                 >
                   <div className="flex items-center gap-3 truncate">
-                    <TableIcon className={`w-4 h-4 shrink-0 ${isActive ? 'text-blue-400' : 'text-slate-400'}`} />
+                    <TableIcon className={`w-4 h-4 shrink-0 ${isActive ? 'text-emerald-400' : 'text-slate-400'}`} />
                     {!isCollapsed && <span className="truncate capitalize font-medium text-xs">{table}</span>}
                   </div>
-                  {!isCollapsed && isActive && <ChevronRight className="w-3.5 h-3.5 text-blue-400 shrink-0" />}
+                  {!isCollapsed && isActive && <ChevronRight className="w-3.5 h-3.5 text-emerald-400 shrink-0" />}
                 </button>
               );
             })}
@@ -207,9 +229,9 @@ export default function SidebarNav({
             <button
               onClick={() => onViewChange('analytics-charts')}
               title="Analytics & Trends"
-              className={`w-full flex items-center gap-3 px-3.5 py-2 rounded-xl text-xs font-semibold transition-all ${
+              className={`w-full flex items-center gap-3 px-3.5 py-2 rounded-lg text-xs font-semibold transition-all ${
                 currentView === 'analytics-charts'
-                  ? 'bg-gradient-to-r from-blue-600/30 to-blue-600/10 border-l-2 border-blue-500 text-white font-bold'
+                  ? 'bg-slate-800/80 border-l-2 border-emerald-500 text-white font-bold'
                   : 'text-slate-300 hover:bg-[#131A2B] hover:text-slate-100'
               }`}
             >
@@ -220,13 +242,13 @@ export default function SidebarNav({
             <button
               onClick={() => onViewChange('analytics-anomalies')}
               title="Anomalies & ML"
-              className={`w-full flex items-center gap-3 px-3.5 py-2 rounded-xl text-xs font-semibold transition-all ${
+              className={`w-full flex items-center gap-3 px-3.5 py-2 rounded-lg text-xs font-semibold transition-all ${
                 currentView === 'analytics-anomalies'
-                  ? 'bg-gradient-to-r from-blue-600/30 to-blue-600/10 border-l-2 border-blue-500 text-white font-bold'
+                  ? 'bg-slate-800/80 border-l-2 border-emerald-500 text-white font-bold'
                   : 'text-slate-300 hover:bg-[#131A2B] hover:text-slate-100'
               }`}
             >
-              <Sparkles className="w-4 h-4 text-purple-400 shrink-0" />
+              <Sparkles className="w-4 h-4 text-emerald-400 shrink-0" />
               {!isCollapsed && <span className="truncate">Anomalies & ML</span>}
             </button>
           </div>
@@ -243,9 +265,9 @@ export default function SidebarNav({
             <button
               onClick={() => onViewChange('pinned')}
               title="Pinned Widgets"
-              className={`w-full flex items-center justify-between px-3.5 py-2 rounded-xl text-xs font-semibold transition-all ${
+              className={`w-full flex items-center justify-between px-3.5 py-2 rounded-lg text-xs font-semibold transition-all ${
                 currentView === 'pinned'
-                  ? 'bg-gradient-to-r from-blue-600/30 to-blue-600/10 border-l-2 border-blue-500 text-white font-bold'
+                  ? 'bg-slate-800/80 border-l-2 border-emerald-500 text-white font-bold'
                   : 'text-slate-300 hover:bg-[#131A2B] hover:text-slate-100'
               }`}
             >
@@ -254,38 +276,79 @@ export default function SidebarNav({
                 {!isCollapsed && <span className="truncate">Pinned Widgets</span>}
               </div>
               {pinnedCount > 0 && (
-                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-blue-950 text-blue-300 border border-blue-800 shrink-0">
+                <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded bg-slate-800 text-emerald-400 border border-slate-700 shrink-0">
                   {pinnedCount}
                 </span>
               )}
             </button>
 
             <button
-              onClick={() => onViewChange('recent')}
-              title="Recent Activity"
-              className={`w-full flex items-center gap-3 px-3.5 py-2 rounded-xl text-xs font-semibold transition-all ${
-                currentView === 'recent'
-                  ? 'bg-gradient-to-r from-blue-600/30 to-blue-600/10 border-l-2 border-blue-500 text-white font-bold'
+              onClick={() => onViewChange('history')}
+              title="Query History"
+              className={`w-full flex items-center gap-3 px-3.5 py-2 rounded-lg text-xs font-semibold transition-all ${
+                currentView === 'history'
+                  ? 'bg-slate-800/80 border-l-2 border-emerald-500 text-white font-bold'
                   : 'text-slate-300 hover:bg-[#131A2B] hover:text-slate-100'
               }`}
             >
               <History className="w-4 h-4 text-slate-400 shrink-0" />
-              {!isCollapsed && <span className="truncate">Recent Activity</span>}
+              {!isCollapsed && <span className="truncate">Query History</span>}
             </button>
 
-            {role === 'ADMIN' && (
+            {/* POLICY RAG SUBSYSTEM MENU ITEM */}
+            <button
+              onClick={() => onViewChange('policy-documents')}
+              title="Policy Documents (RAG)"
+              className={`w-full flex items-center gap-3 px-3.5 py-2 rounded-lg text-xs font-semibold transition-all ${
+                currentView === 'policy-documents'
+                  ? 'bg-slate-800/80 border-l-2 border-emerald-500 text-white font-bold'
+                  : 'text-slate-300 hover:bg-[#131A2B] hover:text-slate-100'
+              }`}
+            >
+              <FileText className="w-4 h-4 text-emerald-400 shrink-0" />
+              {!isCollapsed && <span className="truncate">Policy Documents</span>}
+            </button>
+
+
+            {canConfigureProviders && (
               <button
-                onClick={() => onViewChange('user-management')}
-                title="User Management"
-                className={`w-full flex items-center gap-3 px-3.5 py-2 rounded-xl text-xs font-semibold transition-all ${
-                  currentView === 'user-management'
-                    ? 'bg-gradient-to-r from-purple-600/30 to-purple-600/10 border-l-2 border-purple-500 text-white font-bold'
-                    : 'text-slate-300 hover:bg-[#131A2B] hover:text-slate-100'
-                }`}
+                onClick={onOpenSettings}
+                title="AI Models & Providers"
+                className="w-full flex items-center gap-3 px-3.5 py-2 rounded-xl text-xs font-semibold text-slate-300 hover:bg-[#131A2B] hover:text-white transition-all cursor-pointer"
               >
-                <Users className="w-4 h-4 text-purple-400 shrink-0" />
-                {!isCollapsed && <span className="truncate">User Management</span>}
+                <Cpu className="w-4 h-4 text-emerald-400 shrink-0" />
+                {!isCollapsed && <span className="truncate">AI Models & Providers</span>}
               </button>
+            )}
+
+            {canManageUsers && (
+              <>
+                <button
+                  onClick={() => onViewChange('user-management')}
+                  title="User Management"
+                  className={`w-full flex items-center gap-3 px-3.5 py-2 rounded-xl text-xs font-semibold transition-all ${
+                    currentView === 'user-management'
+                      ? 'bg-gradient-to-r from-teal-600/30 to-teal-600/10 border-l-2 border-teal-500 text-white font-bold'
+                      : 'text-slate-300 hover:bg-[#131A2B] hover:text-slate-100'
+                  }`}
+                >
+                  <Users className="w-4 h-4 text-teal-400 shrink-0" />
+                  {!isCollapsed && <span className="truncate">User Management</span>}
+                </button>
+
+                <button
+                  onClick={() => onViewChange('suadmin')}
+                  title="SuAdmin Administration"
+                  className={`w-full flex items-center gap-3 px-3.5 py-2 rounded-xl text-xs font-semibold transition-all ${
+                    currentView === 'suadmin'
+                      ? 'bg-gradient-to-r from-emerald-600/30 to-emerald-600/10 border-l-2 border-emerald-500 text-white font-bold'
+                      : 'text-slate-300 hover:bg-[#131A2B] hover:text-slate-100'
+                  }`}
+                >
+                  <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0" />
+                  {!isCollapsed && <span className="truncate">SuAdmin Tools</span>}
+                </button>
+              </>
             )}
           </div>
         </div>
@@ -306,14 +369,14 @@ export default function SidebarNav({
                   className="w-full flex items-center justify-between px-3.5 py-1.5 rounded-xl hover:bg-[#131A2B] text-xs text-slate-400 hover:text-white transition-all group cursor-pointer text-left"
                   title={q.natural_query}
                 >
-                  <span className="truncate text-[11px] group-hover:text-blue-400">
+                  <span className="truncate text-[11px] group-hover:text-emerald-400">
                     {q.natural_query}
                   </span>
                 </button>
               ))}
               <button
                 onClick={() => onViewChange('recent')}
-                className="w-full text-left px-3.5 py-1.5 text-[11px] font-semibold text-blue-400 hover:text-blue-300 flex items-center justify-between transition-colors"
+                className="w-full text-left px-3.5 py-1.5 text-[11px] font-semibold text-emerald-400 hover:text-emerald-300 flex items-center justify-between transition-colors"
               >
                 <span>View all queries</span>
                 <ChevronRight className="w-3.5 h-3.5" />
@@ -331,7 +394,7 @@ export default function SidebarNav({
           title={isCollapsed ? "Expand sidebar" : "Collapse sidebar"}
         >
           {isCollapsed ? (
-            <ChevronsRight className="w-4 h-4 text-blue-400" />
+            <ChevronsRight className="w-4 h-4 text-emerald-400" />
           ) : (
             <>
               <ChevronsLeft className="w-4 h-4 text-slate-400" />

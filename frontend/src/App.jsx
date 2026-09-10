@@ -1,8 +1,8 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import api, { setAuthCallbacks } from './api';
-import { 
-  Database, Table as TableIcon, TrendingUp, Sparkles, Pin, Clock, Play, 
-  RefreshCw, LayoutDashboard, ShieldCheck, CheckCircle2, Search, Filter, 
+import {
+  Database, Table as TableIcon, TrendingUp, Sparkles, Pin, Clock, Play,
+  RefreshCw, LayoutDashboard, ShieldCheck, CheckCircle2, Search, Filter,
   Layers, AlertCircle, X, ArrowUpRight, Lock, Loader2
 } from 'lucide-react';
 
@@ -19,9 +19,16 @@ import NoDatabaseConnectedView from './components/NoDatabaseConnectedView';
 import ConnectDatabaseModal from './components/ConnectDatabaseModal';
 import LoginScreen from './components/LoginScreen';
 import UserManagementView from './components/UserManagementView';
+import SetupScreen from './components/SetupScreen';
+import PolicyManagementView from './components/PolicyManagementView';
+import CreateTableModal from './components/CreateTableModal';
+import SuAdminView from './components/SuAdminView';
+
+
 
 export default function App() {
   // Authentication & Session State
+  const [setupRequired, setSetupRequired] = useState(null);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [user, setUser] = useState(null);
   const [role, setRole] = useState(null);
@@ -35,6 +42,7 @@ export default function App() {
 
   // Pipeline Execution State
   const [query, setQuery] = useState('');
+  const [executedQuery, setExecutedQuery] = useState('');
   const [loading, setLoading] = useState(false);
   const [sql, setSql] = useState('');
   const [intent, setIntent] = useState('');
@@ -60,6 +68,12 @@ export default function App() {
   const [dbInsights, setDbInsights] = useState({ summary: '', suggested_queries: [], tables: [] });
   const [tables, setTables] = useState([]);
 
+  // Active Database ID Ref for Race Condition Protection
+  const activeDbIdRef = useRef(selectedDbId);
+  useEffect(() => {
+    activeDbIdRef.current = selectedDbId;
+  }, [selectedDbId]);
+
   // History & Exploration State
   const [recentQueries, setRecentQueries] = useState([]);
 
@@ -71,8 +85,13 @@ export default function App() {
   // Connect Database Modal State
   const [isConnectModalOpen, setIsConnectModalOpen] = useState(false);
 
+  // Create Table Modal State
+  const [isCreateTableModalOpen, setIsCreateTableModalOpen] = useState(false);
+  const [initialCreateTableTableName, setInitialCreateTableTableName] = useState('');
+
   // Settings Modal State
   const [showSettingsModal, setShowSettingsModal] = useState(false);
+
 
   // Persistent Pinned Widgets State
   const [pinnedWidgets, setPinnedWidgets] = useState(() => {
@@ -88,9 +107,15 @@ export default function App() {
   // Expanded Widget Modal State
   const [expandedWidget, setExpandedWidget] = useState(null);
 
+  // Server Shutdown Dialog & State
+  const [showShutdownConfirm, setShowShutdownConfirm] = useState(false);
+  const [isShuttingDownServer, setIsShuttingDownServer] = useState(false);
+  const [serverShutDownComplete, setServerShutDownComplete] = useState(false);
+
   const isConnected = Boolean(selectedDbId && !dbError);
 
-  // Configure centralized API callbacks & validate session on startup
+
+  // Configure centralized API callbacks & check setup status on startup
   useEffect(() => {
     setAuthCallbacks({
       onUnauthorized: (msg) => {
@@ -105,15 +130,40 @@ export default function App() {
       }
     });
 
-    validateSession();
+    checkSetupStatus();
   }, []);
 
-  // Reset view if view is user-management but user is not admin
+  // Check whether first-time administrator setup is required
+  const checkSetupStatus = async () => {
+    try {
+      setAuthLoading(true);
+      const res = await api.get('/setup/status');
+      if (res.data && res.data.setup_required) {
+        setSetupRequired(true);
+        setAuthLoading(false);
+      } else {
+        setSetupRequired(false);
+        await validateSession();
+      }
+    } catch (err) {
+      console.error("Setup status check failed:", err);
+      setSetupRequired(false);
+      await validateSession();
+    }
+  };
+
+  const handleSetupComplete = (newAdminUsername) => {
+    setSetupRequired(false);
+    setAuthError(`Admin account '${newAdminUsername}' created successfully! Please sign in.`);
+  };
+
+  // Reset view if view is user-management but user is not authorized
   useEffect(() => {
-    if (currentView === 'user-management' && role !== 'ADMIN') {
+    const canManage = permissions.includes('MANAGE_USERS') || role === 'ADMIN' || role === 'MASTER_ADMIN';
+    if (currentView === 'user-management' && !canManage) {
       setCurrentView('overview');
     }
-  }, [role, currentView]);
+  }, [role, permissions, currentView]);
 
   // Save pinned widgets to localStorage on change
   useEffect(() => {
@@ -181,8 +231,20 @@ export default function App() {
       await fetchDatabases();
       await fetchHistory();
     } catch (err) {
-      const msg = err.response?.data?.detail || 'Invalid username or password.';
-      setAuthError(msg);
+      if (err.response) {
+        const status = err.response.status;
+        if (status === 401) {
+          setAuthError('Invalid username or password.');
+        } else if (status >= 500) {
+          setAuthError('Could not verify credentials. Please try again.');
+        } else {
+          const msg = err.response.data?.detail || 'Authentication failed. Please check your credentials.';
+          setAuthError(msg);
+        }
+      } else {
+        // Network error / connection refused / backend unreachable
+        setAuthError('Could not verify credentials. Couldn\'t connect to HADIL.');
+      }
     } finally {
       setAuthLoading(false);
     }
@@ -198,6 +260,21 @@ export default function App() {
     setDatabases([]);
     setSelectedDbId('');
   };
+
+  // SuAdmin Graceful Server Shutdown Handler
+  const handleInitiateServerShutdown = async () => {
+    try {
+      setIsShuttingDownServer(true);
+      await api.post('/admin/server/shutdown');
+    } catch (err) {
+      console.log("Shutdown request sent:", err.message);
+    } finally {
+      setIsShuttingDownServer(false);
+      setShowShutdownConfirm(false);
+      setServerShutDownComplete(true);
+    }
+  };
+
 
   // API Call Handlers
   const fetchDatabases = async () => {
@@ -218,57 +295,33 @@ export default function App() {
     }
   };
 
+  // Active Database ID Ref for Race Condition Protection
+  // Database Loading & Invalidation State
+  const [isDbLoading, setIsDbLoading] = useState(false);
+
   const handleDbChange = async (dbId) => {
     try {
       setLoading(true);
-      // Temporarily clear role while switching database
+      setIsDbLoading(true);
+      // 1. Immediately invalidate old database-specific state
       setRole(null);
       setPermissions([]);
+      setDbInsights({ summary: 'Loading database metadata...', suggested_queries: [], tables: [], stats: { table_count: 0, record_count: 0, relation_count: 0 } });
+      setTables([]);
+      setExecutionData(null);
+      setSql('');
+      setValidation(null);
+      setVerification(null);
+      setExecutionError(null);
 
       const res = await api.post('/select-database', { db_id: dbId });
       if (res.data.success) {
         setSelectedDbId(dbId);
+        activeDbIdRef.current = dbId;
         const currentRes = await api.get('/current-database');
         setCurrentDbName(currentRes.data?.name || dbId);
 
-        // Instantly retrieve effective role for newly selected database
-        const meRes = await api.get('/auth/me');
-        setRole(meRes.data.role);
-        setPermissions(meRes.data.permissions || []);
-
-        fetchHistory();
-        fetchDbInsights();
-        fetchTables();
-        setExecutionData(null);
-        setSql('');
-        setValidation(null);
-        setVerification(null);
-        setExecutionError(null);
-      }
-    } catch (err) {
-      const errMsg = err.response?.data?.detail || err.message || "Failed to switch database";
-      alert("Failed to switch database: " + errMsg);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleConnectCustomDatabase = async (connectionUri, name) => {
-    try {
-      setLoading(true);
-      setRole(null);
-      setPermissions([]);
-
-      const res = await api.post('/connect-custom-db', {
-        connection_uri: connectionUri,
-        name: name
-      });
-      if (res.data.success) {
-        setSelectedDbId(res.data.db_id);
-        setCurrentDbName(name || res.data.db_id);
-        setDbError(null);
-
-        // Instantly retrieve effective role for new custom database
+        // Retrieve effective role for newly selected database
         const meRes = await api.get('/auth/me');
         setRole(meRes.data.role);
         setPermissions(meRes.data.permissions || []);
@@ -276,19 +329,79 @@ export default function App() {
         await Promise.all([
           fetchDatabases(),
           fetchHistory(),
-          fetchDbInsights(),
-          fetchTables()
+          fetchDbInsights(dbId),
+          fetchTables(dbId)
         ]);
-        setExecutionData(null);
-        setSql('');
-        setValidation(null);
-        setVerification(null);
-        setExecutionError(null);
+      }
+
+    } catch (err) {
+      const errMsg = err.response?.data?.detail || err.message || "Failed to switch database";
+      alert("Failed to switch database: " + errMsg);
+    } finally {
+      setLoading(false);
+      setIsDbLoading(false);
+    }
+  };
+
+  const handleConnectCustomDatabase = async (connectionUri, name) => {
+    try {
+      setLoading(true);
+      setIsDbLoading(true);
+      // 1. Immediately invalidate old database-specific state
+      setRole(null);
+      setPermissions([]);
+      setDbInsights({ summary: 'Loading database metadata...', suggested_queries: [], tables: [], stats: { table_count: 0, record_count: 0, relation_count: 0 } });
+      setTables([]);
+      setExecutionData(null);
+      setSql('');
+      setValidation(null);
+      setVerification(null);
+      setExecutionError(null);
+
+      const res = await api.post('/connect-custom-db', {
+        connection_uri: connectionUri,
+        name: name
+      });
+      if (res.data.success) {
+        const targetDbId = res.data.db_id;
+        setSelectedDbId(targetDbId);
+        activeDbIdRef.current = targetDbId;
+        setCurrentDbName(name || targetDbId);
+        setDbError(null);
+
+        // Retrieve effective role for new custom database
+        const meRes = await api.get('/auth/me');
+        setRole(meRes.data.role);
+        setPermissions(meRes.data.permissions || []);
+
+        await Promise.all([
+          fetchDatabases(),
+          fetchHistory(),
+          fetchDbInsights(targetDbId),
+          fetchTables(targetDbId)
+        ]);
       }
     } catch (err) {
       throw new Error(err.response?.data?.detail || err.message || "Failed to connect to custom database.");
     } finally {
       setLoading(false);
+      setIsDbLoading(false);
+    }
+  };
+
+  const handleCreateTable = async (tablePayload) => {
+    try {
+      const res = await api.post('/create-table', tablePayload);
+      if (res.data?.success) {
+        setSuccessMessage(res.data.message);
+        await Promise.all([
+          fetchDbInsights(selectedDbId),
+          fetchTables(selectedDbId)
+        ]);
+      }
+    } catch (err) {
+      const msg = err.response?.data?.detail || err.message || "Failed to create table.";
+      throw new Error(msg);
     }
   };
 
@@ -301,27 +414,40 @@ export default function App() {
     }
   };
 
-  const fetchDbInsights = async () => {
+  const fetchDbInsights = async (targetDbId = selectedDbId) => {
     try {
       const res = await api.get('/database-insights');
-      setDbInsights(res.data || { summary: '', suggested_queries: [], tables: [] });
+      // Guard against race conditions: Ignore response if user switched database during fetch
+      if (targetDbId && activeDbIdRef.current && targetDbId !== activeDbIdRef.current) {
+        return;
+      }
+      setDbInsights(res.data || { summary: '', suggested_queries: [], tables: [], stats: { table_count: 0, record_count: 0, relation_count: 0 } });
       if (res.data?.tables) {
         setTables(res.data.tables);
       }
     } catch (err) {
       console.error("Failed to fetch database insights", err);
-      setDbInsights({ summary: '', suggested_queries: [], tables: [] });
+      if (!targetDbId || targetDbId === activeDbIdRef.current) {
+        setDbInsights({ summary: 'No database analysis available', suggested_queries: [], tables: [], stats: { table_count: 0, record_count: 0, relation_count: 0 } });
+      }
     }
   };
 
-  const fetchTables = async () => {
+  const fetchTables = async (targetDbId = selectedDbId) => {
     try {
       const res = await api.get('/schema/tables');
+      // Guard against race conditions
+      if (targetDbId && activeDbIdRef.current && targetDbId !== activeDbIdRef.current) {
+        return;
+      }
       if (res.data?.tables) {
         setTables(res.data.tables);
       }
     } catch (err) {
       console.error("Failed to fetch tables", err);
+      if (!targetDbId || targetDbId === activeDbIdRef.current) {
+        setTables([]);
+      }
     }
   };
 
@@ -397,9 +523,13 @@ export default function App() {
 
   // Conversational Execution Pipeline
   const runPipeline = async (overrideQuery = null) => {
-    const activeQuery = overrideQuery !== null ? overrideQuery : query;
-    if (!activeQuery || !activeQuery.trim() || !selectedDbId) return;
+    const activeQuery = (typeof overrideQuery === 'string' && overrideQuery.trim())
+      ? overrideQuery.trim()
+      : (typeof query === 'string' ? query.trim() : '');
 
+    if (!activeQuery || !selectedDbId) return;
+
+    setExecutedQuery(activeQuery);
     // Clear input box after processing begins (success or failure)
     setQuery('');
 
@@ -430,12 +560,27 @@ export default function App() {
         finalSql = activeQuery;
         setSql(finalSql);
         setIntent('Direct SQL Execution');
+
+        // AI Verification for Raw SQL
+        const verRes = await api.post('/verify-sql', { query: activeQuery, sql: finalSql });
+        setVerification(verRes.data);
+        if (!verRes.data.is_valid) {
+          setLoading(false);
+          return;
+        }
       } else {
         // Natural Language Pipeline -> Detect Intent
         const intentRes = await api.post('/generate-form', { query: activeQuery });
-        
+
         if (intentRes.data.operation === 'ERROR') {
           setExecutionError(intentRes.data.error);
+          setLoading(false);
+          return;
+        }
+
+        if (intentRes.data.operation === 'CREATE_TABLE') {
+          setInitialCreateTableTableName(intentRes.data.target_table_name || '');
+          setIsCreateTableModalOpen(true);
           setLoading(false);
           return;
         }
@@ -482,14 +627,18 @@ export default function App() {
       const execRes = await api.post('/execute-query', {
         sql: finalSql,
         natural_query: sqlMode ? null : activeQuery,
-        is_direct_sql: sqlMode
+        is_direct_sql: sqlMode,
+        is_verified: true
       });
 
       if (execRes.data.success) {
         setExecutionData(execRes.data.data);
         setInterpretedAnswer(execRes.data.interpreted_answer || '');
         setSuggestedViz(execRes.data.suggested_visualization || 'table');
-        setMetadata(execRes.data.metadata);
+        setMetadata({
+          ...(execRes.data.metadata || {}),
+          columns: execRes.data.columns || []
+        });
         setFollowupSuggestions(execRes.data.followup_suggestions || []);
         fetchInsights(execRes.data.data, activeQuery, finalSql);
         fetchHistory();
@@ -540,7 +689,8 @@ export default function App() {
   const handlePinResult = () => {
     if (!executionData) return;
 
-    const existingIndex = pinnedWidgets.findIndex(w => w.original_request === query || w.sql === sql);
+    const queryText = executedQuery || query;
+    const existingIndex = pinnedWidgets.findIndex(w => w.original_request === queryText || w.sql === sql);
     if (existingIndex >= 0) {
       const updated = [...pinnedWidgets];
       updated.splice(existingIndex, 1);
@@ -550,9 +700,9 @@ export default function App() {
 
     const newWidget = {
       id: `widget_${Date.now()}`,
-      title: query || intent || "Database Intelligence Widget",
+      title: queryText || intent || "Database Intelligence Widget",
       type: suggestedViz || 'table',
-      original_request: query,
+      original_request: queryText,
       sql: sql,
       data_source: selectedDbId || 'connected_db',
       created_at: new Date().toISOString(),
@@ -625,15 +775,20 @@ export default function App() {
 
   const dbPinnedWidgets = pinnedWidgets.filter(w => w.data_source === selectedDbId);
   const isCurrentResultPinned = executionData && dbPinnedWidgets.some(
-    w => w.original_request === query || w.sql === sql
+    w => w.original_request === (executedQuery || query) || w.sql === sql
   );
+
+  // If First-Run Setup is Required -> Render Setup Screen
+  if (setupRequired === true && !isAuthenticated) {
+    return <SetupScreen onSetupComplete={handleSetupComplete} />;
+  }
 
   // If Auth initial validation loading
   if (authLoading && !isAuthenticated) {
     return (
       <div className="min-h-screen bg-slate-950 flex items-center justify-center text-white font-sans">
         <div className="flex flex-col items-center space-y-4">
-          <Loader2 className="w-10 h-10 text-blue-500 animate-spin" />
+          <Loader2 className="w-10 h-10 text-emerald-500 animate-spin" />
           <p className="text-xs font-bold uppercase tracking-wider text-slate-400">
             Validating HADIL Workspace Security Session...
           </p>
@@ -662,7 +817,10 @@ export default function App() {
         onOpenSettings={() => setShowSettingsModal(true)}
         onOpenConnectModal={() => setIsConnectModalOpen(true)}
         onLogout={handleLogout}
+        onNavigateOverview={() => setCurrentView('overview')}
+        onCloseServer={() => setShowShutdownConfirm(true)}
       />
+
 
       {/* Global 403 Forbidden Toast Notification */}
       {forbiddenToast && (
@@ -685,6 +843,7 @@ export default function App() {
         <SidebarNav
           currentView={currentView}
           onViewChange={setCurrentView}
+          onOpenSettings={() => setShowSettingsModal(true)}
           pinnedCount={dbPinnedWidgets.length}
           dbInsights={dbInsights}
           tables={tables}
@@ -693,15 +852,21 @@ export default function App() {
           onSelectTable={handleSelectTable}
           isConnected={isConnected}
           role={role}
+          permissions={permissions}
         />
 
         {/* Main Content Workspace */}
         <main className="flex-1 bg-[#0B0F19] overflow-y-auto p-8 space-y-8 custom-scrollbar">
-          
-          {/* VIEW MODE 1: USER MANAGEMENT (ADMIN ONLY) */}
-          {currentView === 'user-management' && role === 'ADMIN' ? (
+
+          {/* VIEW MODE 1: USER MANAGEMENT & SUADMIN */}
+          {currentView === 'user-management' && (permissions.includes('MANAGE_USERS') || role === 'ADMIN' || role === 'MASTER_ADMIN') ? (
             <UserManagementView databases={databases} activeDbId={selectedDbId} currentUser={user} />
+          ) : currentView === 'suadmin' && (permissions.includes('MANAGE_USERS') || role === 'ADMIN' || role === 'MASTER_ADMIN') ? (
+            <SuAdminView databases={databases} activeDbId={selectedDbId} />
+          ) : currentView === 'policy-documents' ? (
+            <PolicyManagementView activeDatabase={databases.find(d => d.id === selectedDbId)} userRole={role} />
           ) : !isConnected ? (
+
             /* STATE 2: DATABASE NOT CONNECTED */
             <NoDatabaseConnectedView
               databases={databases}
@@ -716,52 +881,66 @@ export default function App() {
               <div className="flex flex-wrap items-center justify-between gap-4 pb-2 border-b border-[#1F2A44]">
                 <div>
                   <div className="flex items-center gap-2">
-                    <h2 className="text-2xl font-black text-white tracking-tight">
+                    <h2 className="text-2xl font-serif-brand text-white tracking-wide">
                       Welcome back, {user?.username || 'User'} 👋
                     </h2>
                     {role && (
-                      <span className={`text-[10px] font-mono font-extrabold px-2 py-0.5 rounded border uppercase ${
-                        role === 'ADMIN' ? 'bg-purple-950 text-purple-300 border-purple-800' :
-                        role === 'EDITOR' ? 'bg-blue-950 text-blue-300 border-blue-800' :
-                        'bg-slate-900 text-slate-300 border-slate-700'
-                      }`}>
+                      <span className={`text-[10px] font-mono font-extrabold px-2 py-0.5 rounded border uppercase ${role === 'ADMIN' ? 'bg-purple-950 text-purple-300 border-purple-800' :
+                          role === 'EDITOR' ? 'bg-emerald-950 text-emerald-300 border-emerald-800' :
+                            'bg-slate-900 text-slate-300 border-slate-700'
+                        }`}>
                         {role} Role
                       </span>
                     )}
                   </div>
+
                   <p className="text-xs text-slate-400 font-medium mt-1">
                     Here's what's happening with <strong className="text-slate-200">{currentDbName || selectedDbId}</strong>.
                   </p>
                 </div>
 
-                <button
-                  onClick={() => { fetchDbInsights(); fetchHistory(); }}
-                  className="px-4 py-2 rounded-xl bg-[#131A2B] hover:bg-[#1A2340] text-slate-200 hover:text-white text-xs font-bold border border-[#1F2A44] flex items-center gap-2 transition-all cursor-pointer shadow-md"
-                  title="Sync Ground Truth Metadata"
-                >
-                  <RefreshCw className="w-3.5 h-3.5 text-blue-400" />
-                  <span>Sync Metadata</span>
-                </button>
+                <div className="flex items-center gap-3">
+                  {(role === 'ADMIN' || role === 'EDITOR') && (
+                    <button
+                      onClick={() => setIsCreateTableModalOpen(true)}
+                      className="px-4 py-2 rounded-xl bg-emerald-700 hover:bg-emerald-600 text-white text-xs font-bold border border-emerald-600 flex items-center gap-2 transition-all cursor-pointer shadow-md"
+                      title="Create New Database Table"
+                    >
+                      <TableIcon className="w-3.5 h-3.5" />
+                      <span>+ Create Table</span>
+                    </button>
+                  )}
+
+                  <button
+                    onClick={() => { fetchDbInsights(); fetchHistory(); }}
+                    className="px-4 py-2 rounded-xl bg-[#131A2B] hover:bg-[#1A2340] text-slate-200 hover:text-white text-xs font-bold border border-[#1F2A44] flex items-center gap-2 transition-all cursor-pointer shadow-md"
+                    title="Sync Ground Truth Metadata"
+                  >
+                    <RefreshCw className="w-3.5 h-3.5 text-emerald-400" />
+                    <span>Sync Metadata</span>
+                  </button>
+                </div>
               </div>
+
 
               {/* 1. TOP METRIC KPI CARDS ROW */}
               {currentView === 'overview' && (
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
                   <KpiCard
                     title="TABLES"
-                    value={tables.length > 0 ? tables.length : (dbInsights.tables?.length || '14')}
-                    subtitle="+2 new this week"
-                    change="Online"
-                    changeType="positive"
+                    value={isDbLoading ? 'Loading...' : (dbInsights.stats?.table_count !== undefined ? dbInsights.stats.table_count : tables.length)}
+                    subtitle={isDbLoading ? 'Inspecting schema...' : `${tables.length} discovered entities`}
+                    change={isDbLoading ? 'Syncing' : 'Online'}
+                    changeType={isDbLoading ? 'neutral' : 'positive'}
                     icon={Database}
                     badgeColor="blue"
                   />
                   <KpiCard
                     title="RECORDS"
-                    value="3,484"
+                    value={isDbLoading ? 'Loading...' : (dbInsights.stats?.record_count !== undefined ? (dbInsights.stats.record_count >= 1000 ? `${(dbInsights.stats.record_count / 1000).toFixed(1)}K` : dbInsights.stats.record_count.toLocaleString()) : '0')}
                     subtitle="Across all tables"
-                    change="Active"
-                    changeType="positive"
+                    change={isDbLoading ? 'Syncing' : 'Active'}
+                    changeType={isDbLoading ? 'neutral' : 'positive'}
                     icon={TrendingUp}
                     badgeColor="emerald"
                   />
@@ -844,8 +1023,15 @@ export default function App() {
                 <div className="space-y-4">
                   <div className="flex items-center justify-between text-xs text-slate-400 px-1">
                     <span className="font-extrabold uppercase tracking-widest text-blue-400">Query Intelligence Result</span>
-                    <button 
-                      onClick={() => { setExecutionData(null); setExecutionError(null); setSuccessMessage(''); }}
+                    <button
+                      onClick={() => {
+                        setExecutionData(null);
+                        setExecutionError(null);
+                        setSuccessMessage('');
+                        if (currentView.startsWith('table_')) {
+                          setCurrentView('overview');
+                        }
+                      }}
                       className="px-4 py-2 bg-rose-600 hover:bg-rose-500 text-white font-extrabold text-xs rounded-xl shadow-md shadow-rose-950/40 transition-all flex items-center gap-1.5 active:scale-95 cursor-pointer"
                     >
                       <X className="w-4 h-4" />
@@ -868,7 +1054,7 @@ export default function App() {
                     intent={intent}
                     verification={verification}
                     validation={validation}
-                    query={query}
+                    query={executedQuery || query}
                     onPinResult={handlePinResult}
                     onPredict={handlePredict}
                     onRunFollowup={(sug) => { setQuery(sug); runPipeline(sug); }}
@@ -1035,7 +1221,7 @@ export default function App() {
                             </span>
                             <button
                               onClick={() => reuseQuery(q.id)}
-                              className="px-3.5 py-1.5 bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs rounded-xl transition-colors flex items-center gap-1.5 cursor-pointer"
+                              className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs rounded-xl transition-colors flex items-center gap-1.5 cursor-pointer"
                             >
                               <Play className="w-3 h-3 fill-current" />
                               <span>Run</span>
@@ -1079,6 +1265,7 @@ export default function App() {
         onClose={() => setShowSettingsModal(false)}
         selectedDbId={selectedDbId}
         currentDbName={currentDbName}
+        userRole={role}
       />
 
       {/* CONNECT DATABASE MODAL */}
@@ -1089,7 +1276,90 @@ export default function App() {
         onConnectCustomDatabase={handleConnectCustomDatabase}
         availableDatabases={databases}
         currentDbId={selectedDbId}
+        userRole={role}
       />
+
+
+      {/* CREATE TABLE MODAL */}
+      <CreateTableModal
+        isOpen={isCreateTableModalOpen}
+        onClose={() => setIsCreateTableModalOpen(false)}
+        onCreateTable={handleCreateTable}
+        currentDbName={currentDbName}
+        initialTableName={initialCreateTableTableName}
+        activeDbId={selectedDbId}
+      />
+      {/* SERVER SHUTDOWN CONFIRMATION DIALOG */}
+      {showShutdownConfirm && (
+        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-md flex items-center justify-center z-50 p-4">
+          <div className="bg-[#131A2B] border border-rose-800/80 rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-5 animate-in zoom-in-95 duration-200">
+            <div className="flex items-center gap-3 border-b border-[#1F2A44] pb-4">
+              <div className="w-10 h-10 rounded-xl bg-rose-950/90 border border-rose-700 flex items-center justify-center shrink-0">
+                <Power className="w-5 h-5 text-rose-400" />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-slate-100">Close HADIL Application?</h3>
+                <p className="text-xs text-rose-300 font-medium">Master Administrator Action</p>
+              </div>
+            </div>
+
+            <p className="text-xs text-slate-300 leading-relaxed">
+              This will gracefully close the HADIL application and disconnect active sessions.
+            </p>
+
+            <div className="flex items-center justify-end gap-3 pt-2">
+              <button
+                disabled={isShuttingDownServer}
+                onClick={() => setShowShutdownConfirm(false)}
+                className="px-4 py-2 bg-[#1A2340] hover:bg-[#232F52] text-slate-300 text-xs font-semibold rounded-xl border border-[#1F2A44] transition-colors cursor-pointer disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                disabled={isShuttingDownServer}
+                onClick={handleInitiateServerShutdown}
+                className="px-4 py-2 bg-rose-700 hover:bg-rose-600 text-white text-xs font-bold rounded-xl border border-rose-600 flex items-center gap-2 transition-all shadow-lg cursor-pointer disabled:opacity-50"
+              >
+                {isShuttingDownServer ? (
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    <span>Closing...</span>
+                  </>
+                ) : (
+                  <>
+                    <Power className="w-3.5 h-3.5" />
+                    <span>Close HADIL</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* SHUTTING DOWN / SERVER CLOSED OVERLAY */}
+      {serverShutDownComplete && (
+        <div className="fixed inset-0 bg-slate-950 flex items-center justify-center z-50 p-6">
+          <div className="bg-[#131A2B] border border-[#1F2A44] rounded-2xl max-w-lg w-full p-8 text-center space-y-6 shadow-2xl">
+            <div className="w-16 h-16 rounded-2xl bg-emerald-950/80 border border-emerald-700/80 flex items-center justify-center mx-auto">
+              <Power className="w-8 h-8 text-emerald-400" />
+            </div>
+
+            <div className="space-y-2">
+              <h2 className="text-xl font-bold text-slate-100">HADIL Has Been Closed</h2>
+              <p className="text-xs text-slate-400 leading-relaxed">
+                The application was gracefully closed by a Master Administrator. All active database sessions and service workers have been safely terminated.
+              </p>
+            </div>
+
+            <div className="p-4 rounded-xl bg-[#0B0F19] border border-[#1F2A44] text-xs font-mono text-slate-400">
+              You may now safely close this browser window or tab.
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
+
+

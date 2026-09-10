@@ -1,80 +1,133 @@
 import pandas as pd
 import numpy as np
+import re
 from typing import List, Dict, Any, Optional
 import logging
 
 logger = logging.getLogger(__name__)
 
-from ai_modules.context_analyzer import extract_query_context
+def is_id_column(col_name: str) -> bool:
+    """
+    Returns True if the column is an ID, primary key, or foreign key column.
+    ID columns must not be used for generic average or min/max statistical takeaways.
+    """
+    c_lower = str(col_name).lower().strip()
+    if c_lower == 'id':
+        return True
+    if c_lower.endswith('_id') or c_lower.endswith('id'):
+        if any(x in c_lower for x in ['user', 'customer', 'album', 'artist', 'order', 'invoice', 'track', 'genre', 'playlist', 'employee', 'media', 'product', 'item']):
+            return True
+    return False
 
 def generate_insights(data: List[Dict[str, Any]], query: Optional[str] = None, sql: Optional[str] = None) -> List[str]:
-    if not data:
-        return ["No data available to generate insights."]
+    """
+    Generates query-relevant insights ONLY when they directly answer, explain, or contextualize
+    the user's original natural-language question.
     
+    Returns [] (empty list) when there are no meaningful, query-specific takeaways.
+    Does NOT invoke any LLM API call.
+    """
+    if not data or len(data) == 0:
+        return []
+
     try:
         df = pd.DataFrame(data)
+        if df.empty:
+            return []
+
+        q_lower = query.lower().strip() if query else ""
+        sql_lower = sql.lower().strip() if sql else ""
+        columns = list(df.columns)
+
+        # Filter out ID / primary key columns for statistical analysis
+        valid_cols = [c for c in columns if not is_id_column(c)]
+        num_cols = [c for c in valid_cols if pd.api.types.is_numeric_dtype(df[c])]
+        cat_cols = [c for c in valid_cols if not pd.api.types.is_numeric_dtype(df[c])]
+
+        # Check for plain data dump / generic retrieval queries (e.g., "Show me all users", "Show me customers")
+        is_generic_dump = False
+        if not q_lower or any(p in q_lower for p in [
+            "show me all", "show all", "list all", "get all", "select all",
+            "show me users", "show users", "show me customers", "show customers",
+            "show me orders", "show orders", "show me products", "show products",
+            "show data from", "display all"
+        ]) and not any(w in q_lower for w in ["top", "highest", "most", "average", "avg", "total", "sum", "count", "each", "group", "by"]):
+            is_generic_dump = True
+
+        if is_generic_dump and "group by" not in sql_lower and "count(" not in sql_lower and "sum(" not in sql_lower and "avg(" not in sql_lower:
+            return []
+
         insights = []
-        context = extract_query_context(query, sql) if query and sql else None
 
-        # 1. Detect Column Types
-        num_cols = df.select_dtypes(include=[np.number]).columns.tolist()
-        cat_cols = df.select_dtypes(include=['object']).columns.tolist()
-        
-        # Attempt to find time columns
-        time_cols = []
-        for col in cat_cols:
-            if any(word in col.lower() for word in ['date', 'time', 'created', 'year', 'month']):
-                try:
-                    df[col] = pd.to_datetime(df[col])
-                    time_cols.append(col)
-                except: pass
-        
-        cat_cols = [c for c in cat_cols if c not in time_cols]
+        # Scenario 1: Ranking / Top N Queries (e.g., "What are the top 5 albums by revenue?", "top selling products")
+        if any(w in q_lower for w in ["top", "highest", "best", "most revenue", "leading", "greatest"]) or ("order by" in sql_lower and "desc" in sql_lower):
+            metric_col = next((c for c in num_cols if any(m in c.lower() for m in ["total", "revenue", "amount", "sales", "count", "price", "sum", "val"])), None)
+            if not metric_col and num_cols:
+                metric_col = num_cols[0]
 
-        # 2. Semantic Mapping
-        metric_label = context.get("target_metric") if context else None
-        entity_label = context.get("entity_type") if context else None
+            entity_col = next((c for c in cat_cols if any(e in c.lower() for e in ["name", "title", "customer", "album", "artist", "product", "country"])), None)
+            if not entity_col and cat_cols:
+                entity_col = cat_cols[0]
 
-        # 3. Numeric Insights (Context-Aware)
-        for col in num_cols:
-            mean_val = df[col].mean()
-            max_val = df[col].max()
-            label = metric_label if metric_label and col.lower() in metric_label.lower() else col
+            if entity_col and metric_col and len(df) > 0:
+                top_row = df.sort_values(by=metric_col, ascending=False).iloc[0]
+                entity_val = top_row[entity_col]
+                metric_val = top_row[metric_col]
+                
+                is_currency = any(curr in metric_col.lower() or curr in q_lower for curr in ["revenue", "price", "amount", "total", "sales", "val", "cost", "dollar", "$"])
+                formatted_val = f"${metric_val:,.2f}" if is_currency else f"{metric_val:,.0f}" if isinstance(metric_val, (int, np.integer)) else f"{metric_val:,.2f}"
+                
+                insights.append(f"'{entity_val}' generated the highest {metric_col} ({formatted_val}) among the top results.")
+                return insights
+
+        # Scenario 2: Aggregation / Category Count Queries (e.g., "How many customers are from each country?", "Which country has the most customers?")
+        if any(w in q_lower for w in ["each", "per", "by country", "by status", "by category", "how many", "count", "distribution"]) or "group by" in sql_lower:
+            category_col = next((c for c in cat_cols if any(cat in c.lower() for cat in ["country", "status", "category", "type", "genre", "state", "city"])), None)
+            if not category_col and cat_cols:
+                category_col = cat_cols[0]
+
+            count_col = next((c for c in num_cols if any(cnt in c.lower() for cnt in ["count", "total", "num", "customers", "orders", "users", "quantity"])), None)
+
+            if category_col:
+                if count_col:
+                    top_row = df.sort_values(by=count_col, ascending=False).iloc[0]
+                    top_cat = top_row[category_col]
+                    top_val = top_row[count_col]
+                    count_str = f"{int(top_val):,}" if isinstance(top_val, (int, np.integer, float)) else str(top_val)
+                    insights.append(f"'{top_cat}' has the highest number of records ({count_str}).")
+                    return insights
+                else:
+                    counts = df[category_col].value_counts()
+                    if not counts.empty:
+                        top_cat = counts.idxmax()
+                        top_count = counts.max()
+                        insights.append(f"'{top_cat}' has the highest number of customers ({top_count}).")
+                        return insights
+
+        # Scenario 3: Average / Total / Specific Metric Queries (e.g., "What is the average order value?", "What is total revenue?")
+        if any(w in q_lower for w in ["average", "avg", "mean", "total", "sum"]) and num_cols:
+            target_metric = next((c for c in num_cols if any(m in c.lower() for m in ["amount", "total", "price", "val", "cost", "revenue", "sales"])), num_cols[0])
             
-            insights.append(f"Average {label} is {mean_val:.2f}.")
-            insights.append(f"The highest recorded {label} is {max_val:.2f}.")
-            
-            if len(df) > 1:
-                std_dev = df[col].std()
-                if std_dev > mean_val * 0.5:
-                    insights.append(f"There is high variability in {label}, suggesting inconsistent results.")
-                elif std_dev < mean_val * 0.1:
-                    insights.append(f"The {label} appears to be very stable over time.")
+            if "average" in q_lower or "avg" in q_lower or "mean" in q_lower:
+                avg_val = df[target_metric].mean()
+                is_currency = any(curr in target_metric.lower() or curr in q_lower for curr in ["amount", "price", "revenue", "sales", "val", "cost", "$", "dollar", "order"])
+                formatted_avg = f"${avg_val:,.2f}" if is_currency else f"{avg_val:,.2f}"
+                insights.append(f"The average {target_metric} is {formatted_avg}.")
+                return insights
 
-        # 4. Categorical Insights
-        for col in cat_cols:
-            counts = df[col].value_counts()
-            if not counts.empty:
-                top_cat = counts.idxmax()
-                top_count = counts.max()
-                label = entity_label if entity_label and col.lower() in entity_label.lower() else col
-                insights.append(f"'{top_cat}' is the most frequent {label} in this dataset.")
+            if "total" in q_lower or "sum" in q_lower:
+                tot_val = df[target_metric].sum()
+                is_currency = any(curr in target_metric.lower() or curr in q_lower for curr in ["amount", "price", "revenue", "sales", "val", "cost", "$", "dollar"])
+                formatted_tot = f"${tot_val:,.2f}" if is_currency else f"{tot_val:,.2f}"
+                insights.append(f"The total {target_metric} is {formatted_tot}.")
+                return insights
 
-        # 5. Trend Insights
-        if time_cols and num_cols:
-            t_col = time_cols[0]
-            n_col = num_cols[0]
-            df_sorted = df.sort_values(by=t_col)
-            
-            if len(df_sorted) >= 2:
-                diff = df_sorted[n_col].iloc[-1] - df_sorted[n_col].iloc[0]
-                direction = "upward" if diff > 0 else "downward"
-                insights.append(f"The trend for {n_col} shows a general {direction} movement.")
+        # Default fallback: return [] when no query-specific takeaway applies
+        return []
 
-        return insights
     except Exception as e:
-        logger.error(f"Error generating insights: {e}")
-        return [f"Analysis completed, but semantic insights could not be fully generated."]
+        logger.error(f"Error generating query-relevant insights: {e}")
+        return []
 
 def predict_trend(data: List[Dict[str, Any]], query: Optional[str] = None, sql: Optional[str] = None) -> Dict[str, Any]:
     if not data or len(data) < 3:
@@ -85,10 +138,9 @@ def predict_trend(data: List[Dict[str, Any]], query: Optional[str] = None, sql: 
         num_cols = df.select_dtypes(include=[np.number]).columns.tolist()
         cat_cols = df.select_dtypes(include=['object']).columns.tolist()
         
-        # Get Context
+        from ai_modules.context_analyzer import extract_query_context
         context = extract_query_context(query, sql) if query and sql else None
         
-        # Find time column
         time_col = None
         for col in cat_cols:
             if any(word in col.lower() for word in ['date', 'time', 'created', 'year', 'month']):
@@ -104,26 +156,21 @@ def predict_trend(data: List[Dict[str, Any]], query: Optional[str] = None, sql: 
         target_col = num_cols[0]
         y = df[target_col].values
         
-        # 1. Dynamic Model Selection
         method = "Simple Linear Regression"
         confidence_val = "Medium"
         
-        # Check variance
         variance = np.std(y) / np.mean(y) if np.mean(y) != 0 else 0
         
         if len(y) < 5:
-            # Too small for regression, use Moving Average
             method = "Simple Moving Average"
             prediction = np.mean(y[-3:])
             confidence_val = "Low (Small Dataset)"
         elif variance > 1.0:
-            # Too noisy for linear trend
             method = "Weighted Moving Average"
             weights = np.arange(1, len(y) + 1)
             prediction = np.average(y, weights=weights)
             confidence_val = "Low (High Volatility)"
         else:
-            # Linear trend
             if time_col:
                 df = df.sort_values(by=time_col)
                 X = df[time_col].apply(lambda x: x.toordinal()).values.reshape(-1, 1)
@@ -143,7 +190,6 @@ def predict_trend(data: List[Dict[str, Any]], query: Optional[str] = None, sql: 
             prediction = model.predict(next_x.reshape(-1, 1))[0]
             confidence_val = "High" if len(y) > 10 and variance < 0.2 else "Medium"
 
-        # 2. Semantic Message Construction
         metric = context.get("target_metric", target_col) if context else target_col
         entity = context.get("entity_type", "") if context else ""
         time_dim = context.get("time_dimension", "") if context else ""

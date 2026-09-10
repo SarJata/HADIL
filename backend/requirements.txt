@@ -1,5 +1,28 @@
+# HADIL backend runtime dependencies (Render-compatible).
+# Unpinned to match the existing project style; do not install from the local venv freeze.
+
+# API / server
 fastapi
 uvicorn
+python-multipart
 python-dotenv
-openai
+
+# Data layer
 sqlalchemy
+pymysql
+psycopg2-binary
+
+# Auth / secrets
+PyJWT
+cryptography
+
+# LLM providers (OpenAI SDK; Gemini/custom use stdlib urllib)
+openai
+
+# Insights / RAG
+numpy
+pandas
+sentence-transformers
+faiss-cpu
+pypdf
+python-docx

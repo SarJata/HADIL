@@ -3,6 +3,25 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+def check_unsafe_subquery_limit(sql: str) -> tuple[bool, str]:
+    """
+    Analyzes SQL to distinguish between:
+    - Final outer LIMIT (valid on top-N grouped/aggregated results)
+    - Unsafe intermediate LIMIT inside subqueries or derived tables prior to aggregation (invalid/unsafe)
+    
+    Returns (is_unsafe, reason).
+    """
+    sql_clean = re.sub(r"/\*.*?\*/", "", sql, flags=re.DOTALL)
+    sql_clean = re.sub(r"--.*$", "", sql_clean, flags=re.MULTILINE)
+    
+    # Match subqueries containing LIMIT inside parentheses e.g. (SELECT ... LIMIT ...)
+    subquery_limit_pattern = r"\(\s*select\b.*?\blimit\s+\d+.*?\)"
+    if re.search(subquery_limit_pattern, sql_clean, re.IGNORECASE | re.DOTALL):
+        if re.search(r"\bgroup\s+by\b|\bcount\s*\(|\bsum\s*\(|\bavg\s*\(|\bmin\s*\(|\bmax\s*\(", sql_clean, re.IGNORECASE):
+            return True, "Subquery contains a LIMIT clause prior to outer aggregation/GROUP BY, which unsafely truncates data before grouping."
+            
+    return False, ""
+
 def validate_sql(sql: str, is_direct_sql: bool = False):
     """
     Rule-Based SQL Validator.
@@ -24,6 +43,12 @@ def validate_sql(sql: str, is_direct_sql: bool = False):
     if "--" in sql_lower or "/*" in sql_lower:
         is_safe = False
         errors.append("SQL comments are not allowed in queries for safety reasons.")
+    
+    # Prevent unsafe intermediate subquery LIMIT
+    is_unsafe_subquery, subquery_reason = check_unsafe_subquery_limit(sql)
+    if is_unsafe_subquery:
+        is_safe = False
+        errors.append(subquery_reason)
     
     # 1. Block CRITICAL Dangerous Keywords
     critical_blocked = ["drop", "alter", "truncate", "exec", "grant", "revoke", "vacuum"]
@@ -97,3 +122,4 @@ def validate_sql(sql: str, is_direct_sql: bool = False):
     logger.info(f"Validation result for SQL (Direct: {is_direct_sql}): {sql} -> Safe: {is_safe}, Errors: {errors}")
     
     return is_safe, warnings, errors
+

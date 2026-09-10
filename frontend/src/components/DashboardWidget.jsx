@@ -127,16 +127,16 @@ export default function DashboardWidget({
   };
 
   return (
-    <div className="bg-white rounded-2xl border border-slate-200 shadow-sm hover:shadow-md transition-all duration-200 flex flex-col justify-between overflow-hidden group">
+    <div className="bg-[#131A2B] rounded-lg border border-[#1F2A44] flex flex-col justify-between overflow-hidden group">
       {/* Widget Header */}
-      <div className="p-4 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
-        <div className="flex items-center gap-2.5 overflow-hidden">
-          <div className="w-2.5 h-2.5 rounded-full bg-blue-600 shrink-0" />
+      <div className="p-3 border-b border-[#1F2A44] flex items-center justify-between bg-[#0F1626]">
+        <div className="flex items-center gap-2 overflow-hidden">
+          <div className="w-2 h-2 rounded-full bg-emerald-500 shrink-0" />
           <div className="truncate">
-            <h4 className="text-sm font-bold text-slate-900 truncate" title={widget.title}>
+            <h4 className="text-xs font-bold text-slate-100 truncate" title={widget.title}>
               {widget.title || "Analytics Widget"}
             </h4>
-            <p className="text-[11px] text-slate-500 font-medium truncate flex items-center gap-1.5 mt-0.5">
+            <p className="text-[10px] text-slate-400 font-mono truncate flex items-center gap-1.5 mt-0.5">
               <span>{widget.original_request || widget.sql}</span>
             </p>
           </div>
@@ -145,40 +145,40 @@ export default function DashboardWidget({
         {/* Header Action Controls */}
         <div className="flex items-center gap-1 shrink-0">
           {/* Viz switcher */}
-          <div className="flex items-center bg-slate-200/60 p-0.5 rounded-lg mr-1">
+          <div className="flex items-center bg-[#131A2B] p-0.5 rounded border border-[#1F2A44] mr-1">
             <button 
               onClick={() => setActiveViz('table')} 
-              className={`p-1 rounded text-slate-600 hover:text-slate-900 transition-colors ${activeViz === 'table' ? 'bg-white shadow-xs text-blue-600 font-bold' : ''}`}
+              className={`p-1 rounded text-slate-400 hover:text-slate-100 transition-colors ${activeViz === 'table' ? 'bg-[#0F1626] text-emerald-400 font-bold' : ''}`}
               title="Table View"
             >
-              <TableIcon className="w-3.5 h-3.5" />
+              <TableIcon className="w-3 h-3" />
             </button>
             <button 
               onClick={() => setActiveViz('bar')} 
-              className={`p-1 rounded text-slate-600 hover:text-slate-900 transition-colors ${activeViz === 'bar' ? 'bg-white shadow-xs text-blue-600 font-bold' : ''}`}
+              className={`p-1 rounded text-slate-400 hover:text-slate-100 transition-colors ${activeViz === 'bar' ? 'bg-[#0F1626] text-emerald-400 font-bold' : ''}`}
               title="Bar Chart"
             >
-              <BarChart2 className="w-3.5 h-3.5" />
+              <BarChart2 className="w-3 h-3" />
             </button>
             <button 
               onClick={() => setActiveViz('line')} 
-              className={`p-1 rounded text-slate-600 hover:text-slate-900 transition-colors ${activeViz === 'line' ? 'bg-white shadow-xs text-blue-600 font-bold' : ''}`}
+              className={`p-1 rounded text-slate-400 hover:text-slate-100 transition-colors ${activeViz === 'line' ? 'bg-[#0F1626] text-emerald-400 font-bold' : ''}`}
               title="Line Chart"
             >
-              <LineChartIcon className="w-3.5 h-3.5" />
+              <LineChartIcon className="w-3 h-3" />
             </button>
             <button 
               onClick={() => setActiveViz('pie')} 
-              className={`p-1 rounded text-slate-600 hover:text-slate-900 transition-colors ${activeViz === 'pie' ? 'bg-white shadow-xs text-blue-600 font-bold' : ''}`}
+              className={`p-1 rounded text-slate-400 hover:text-slate-100 transition-colors ${activeViz === 'pie' ? 'bg-[#0F1626] text-emerald-400 font-bold' : ''}`}
               title="Pie Chart"
             >
-              <PieChartIcon className="w-3.5 h-3.5" />
+              <PieChartIcon className="w-3 h-3" />
             </button>
           </div>
 
           <button 
             onClick={handleRefresh}
-            className={`p-1.5 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-lg transition-colors ${refreshing ? 'animate-spin text-blue-600' : ''}`}
+            className={`p-1 text-slate-400 hover:text-slate-100 hover:bg-[#1A2340] rounded transition-colors ${refreshing ? 'animate-spin text-emerald-400' : ''}`}
             title="Refresh Widget Data"
           >
             <RefreshCw className="w-3.5 h-3.5" />
@@ -186,7 +186,7 @@ export default function DashboardWidget({
 
           <button 
             onClick={() => onTogglePin && onTogglePin(widget)}
-            className={`p-1.5 rounded-lg transition-colors ${isPinned ? 'text-amber-600 bg-amber-50 hover:bg-amber-100' : 'text-slate-400 hover:text-slate-700 hover:bg-slate-100'}`}
+            className={`p-1 rounded transition-colors ${isPinned ? 'text-amber-400 bg-amber-950/60 border border-amber-800' : 'text-slate-400 hover:text-slate-100 hover:bg-[#1A2340]'}`}
             title={isPinned ? "Unpin Widget" : "Pin to Dashboard"}
           >
             <Pin className="w-3.5 h-3.5 fill-current" />
@@ -194,7 +194,7 @@ export default function DashboardWidget({
 
           <button 
             onClick={() => onExpand && onExpand(widget)}
-            className="p-1.5 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-lg transition-colors"
+            className="p-1 text-slate-400 hover:text-slate-100 hover:bg-[#1A2340] rounded transition-colors"
             title="Expand Full Screen"
           >
             <Maximize2 className="w-3.5 h-3.5" />
@@ -202,7 +202,7 @@ export default function DashboardWidget({
 
           <button 
             onClick={() => onRemove && onRemove(widget.id)}
-            className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+            className="p-1 text-slate-400 hover:text-rose-400 hover:bg-rose-950/60 rounded transition-colors"
             title="Remove Widget"
           >
             <Trash2 className="w-3.5 h-3.5" />
@@ -211,11 +211,11 @@ export default function DashboardWidget({
       </div>
 
       {/* Widget Body Content */}
-      <div className="p-4 flex-1">
+      <div className="p-3 flex-1">
         {/* Interpretation Badge if available */}
         {widget.interpretedAnswer && (
-          <div className="mb-3 p-2.5 rounded-xl bg-blue-50 border border-blue-100 text-blue-900 text-xs font-medium leading-relaxed flex items-start gap-2">
-            <Sparkles className="w-4 h-4 text-blue-600 shrink-0 mt-0.5" />
+          <div className="mb-2.5 p-2 rounded bg-[#0F1626] border border-emerald-800/60 text-emerald-300 text-xs font-medium leading-relaxed flex items-start gap-2">
+            <Sparkles className="w-3.5 h-3.5 text-emerald-400 shrink-0 mt-0.5" />
             <span>{widget.interpretedAnswer}</span>
           </div>
         )}
@@ -224,10 +224,10 @@ export default function DashboardWidget({
 
         {/* AI Insights List if available */}
         {widget.insights && widget.insights.length > 0 && (
-          <div className="mt-3 pt-3 border-t border-slate-100 space-y-1.5">
+          <div className="mt-2.5 pt-2.5 border-t border-[#1F2A44] space-y-1">
             {widget.insights.slice(0, 2).map((ins, idx) => (
-              <div key={idx} className="flex items-start gap-1.5 text-[11px] text-slate-600">
-                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500 shrink-0 mt-0.5" />
+              <div key={idx} className="flex items-start gap-1.5 text-[11px] text-slate-300">
+                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0 mt-0.5" />
                 <span className="line-clamp-2">{ins}</span>
               </div>
             ))}
@@ -236,15 +236,16 @@ export default function DashboardWidget({
       </div>
 
       {/* Widget Footer */}
-      <div className="px-4 py-2 bg-slate-50 border-t border-slate-100 flex items-center justify-between text-[10px] text-slate-400">
-        <span className="flex items-center gap-1">
-          <Clock className="w-3 h-3" />
+      <div className="px-3 py-1.5 bg-[#0F1626] border-t border-[#1F2A44] flex items-center justify-between text-[10px] text-slate-400">
+        <span className="flex items-center gap-1 font-mono">
+          <Clock className="w-3 h-3 text-slate-500" />
           <span>Refreshed: {widget.last_refreshed || 'Just now'}</span>
         </span>
-        <span className="font-mono bg-slate-200/70 text-slate-600 px-1.5 py-0.5 rounded uppercase font-semibold">
+        <span className="font-mono bg-[#131A2B] text-slate-300 px-1.5 py-0.5 rounded border border-[#1F2A44] uppercase font-semibold">
           {widget.executionData ? `${widget.executionData.length} Rows` : '0 Rows'}
         </span>
       </div>
     </div>
   );
 }
+

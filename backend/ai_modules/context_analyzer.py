@@ -1,13 +1,12 @@
 import os
 import json
 import logging
-from openai import OpenAI
 from dotenv import load_dotenv
+from ai_modules.providers import get_llm_provider
 
 load_dotenv(override=True)
 
 logger = logging.getLogger(__name__)
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 def extract_query_context(query: str, sql: str):
     """
@@ -17,7 +16,8 @@ def extract_query_context(query: str, sql: str):
     if not query or not sql:
         return None
 
-    prompt = f"""
+    system_prompt = "You are a specialized business context analyzer for data science."
+    user_prompt = f"""
 Analyze the following natural language query and its corresponding SQL to extract business context for machine learning forecasting.
 
 User Query: "{query}"
@@ -43,19 +43,11 @@ Example:
 """
 
     try:
-        response = client.chat.completions.create(
-            model="gpt-4o",
-            messages=[
-                {"role": "system", "content": "You are a specialized business context analyzer for data science."},
-                {"role": "user", "content": prompt}
-            ],
-            temperature=0,
-            response_format={"type": "json_object"}
-        )
-        
-        context = json.loads(response.choices[0].message.content.strip())
+        provider = get_llm_provider("generator")
+        context = provider.generate_json(system_prompt, user_prompt)
         logger.info(f"Extracted Context: {context}")
         return context
     except Exception as e:
         logger.error(f"Error extracting context: {e}")
         return None
+

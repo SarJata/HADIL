@@ -8,7 +8,8 @@ def get_db():
     try:
         yield db
     finally:
-        db.close()
+        if db is not None:
+            db.close()
 
 def get_engine():
     return db_manager.engine

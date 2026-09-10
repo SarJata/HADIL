@@ -1,5 +1,5 @@
 import React from 'react';
-import { Database, Zap, RefreshCw, AlertCircle, ArrowRight, Plus } from 'lucide-react';
+import { Database, RefreshCw, AlertCircle, ArrowRight, Plus } from 'lucide-react';
 
 export default function NoDatabaseConnectedView({ 
   databases = [], 
@@ -11,7 +11,7 @@ export default function NoDatabaseConnectedView({
     <div className="flex-1 flex flex-col items-center justify-center p-8 text-center text-slate-100 min-h-[60vh]">
       <div className="max-w-md mx-auto space-y-6 animate-in fade-in duration-500">
         {/* Logo Badge */}
-        <div className="w-16 h-16 rounded-2xl bg-blue-600/20 border border-blue-500/30 flex items-center justify-center mx-auto text-blue-400 shadow-xl shadow-blue-900/20">
+        <div className="w-16 h-16 rounded-2xl bg-emerald-600/20 border border-emerald-500/30 flex items-center justify-center mx-auto text-emerald-400 shadow-xl shadow-emerald-900/20">
           <Database className="w-8 h-8" />
         </div>
 
@@ -32,7 +32,7 @@ export default function NoDatabaseConnectedView({
         <div className="space-y-4 pt-2">
           <button
             onClick={onOpenConnectModal}
-            className="w-full max-w-xs mx-auto px-6 py-3.5 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-black text-xs uppercase tracking-wider rounded-2xl transition-all shadow-xl shadow-blue-900/40 flex items-center justify-center gap-2 cursor-pointer active:scale-95"
+            className="w-full max-w-xs mx-auto px-6 py-3.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-black text-xs uppercase tracking-wider rounded-2xl transition-all shadow-xl shadow-emerald-900/40 flex items-center justify-center gap-2 cursor-pointer active:scale-95"
           >
             <Plus className="w-4 h-4" />
             <span>Connect Database</span>
@@ -51,7 +51,7 @@ export default function NoDatabaseConnectedView({
                     className="w-full px-4 py-2.5 bg-[#131A2B] hover:bg-[#1A2340] border border-[#1F2A44] hover:border-slate-600 text-slate-200 font-bold text-xs rounded-xl transition-all flex items-center justify-between group cursor-pointer"
                   >
                     <div className="flex items-center gap-2">
-                      <Database className="w-3.5 h-3.5 text-blue-400" />
+                      <Database className="w-3.5 h-3.5 text-emerald-400" />
                       <span className="font-mono">{db.name}</span>
                     </div>
                     <ArrowRight className="w-3.5 h-3.5 text-slate-400 group-hover:translate-x-1 transition-transform" />

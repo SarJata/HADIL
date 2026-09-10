@@ -4,7 +4,8 @@ import hashlib
 import json
 import secrets
 from typing import Optional, List, Dict, Any
-from sqlalchemy import create_engine, Column, Integer, String, DateTime, ForeignKey, Text
+from sqlalchemy import create_engine, Column, Integer, String, DateTime, ForeignKey, Text, text
+
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, relationship, Session
 
@@ -17,9 +18,11 @@ class HadilDatabase(MetadataBase):
     name = Column(String, nullable=False)
     database_type = Column(String, nullable=False, default="sqlite") # e.g. "sqlite", "postgresql", "mysql"
     connection_uri_hash = Column(String, nullable=True) # Hash/reference if needed, avoid storing plaintext
+    connection_uri_encrypted = Column(Text, nullable=True) # Encrypted connection string for remote RDBMS persistence
     status = Column(String, default="active")
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
+
 
     roles = relationship("HadilUserDatabaseRole", back_populates="database", cascade="all, delete-orphan")
     faqs = relationship("HadilDatabaseFAQ", back_populates="database", cascade="all, delete-orphan")
@@ -52,6 +55,22 @@ class HadilUserDatabaseRole(MetadataBase):
 
     user = relationship("HadilUser", back_populates="roles")
     database = relationship("HadilDatabase", back_populates="roles")
+
+
+class HadilSystemRole(MetadataBase):
+    """
+    Persists system-wide singleton roles.
+    Enforces AT MOST ONE MASTER_ADMIN at the database level via fixed slot key/unique constraint.
+    slot: Always 1 (only 1 row can ever exist with slot=1).
+    """
+    __tablename__ = "hadil_system_roles"
+
+    slot = Column(Integer, primary_key=True, default=1)
+    user_id = Column(Integer, ForeignKey("hadil_users.id"), nullable=False, unique=True)
+    role = Column(String, nullable=False, default="MASTER_ADMIN")
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+    user = relationship("HadilUser")
 
 
 class HadilDatabaseFAQ(MetadataBase):
@@ -107,7 +126,47 @@ class HadilPinnedWidget(MetadataBase):
     database = relationship("HadilDatabase", back_populates="pinned_widgets")
 
 
+class HadilLLMConfig(MetadataBase):
+    __tablename__ = "hadil_llm_config"
+
+    id = Column(Integer, primary_key=True, index=True)
+    target = Column(String, unique=True, index=True, nullable=False) # "generator" or "verifier"
+    provider_type = Column(String, nullable=False, default="openai") # "openai", "ollama", "custom"
+    endpoint = Column(String, nullable=True) # e.g. "https://ai.company.local/v1"
+    model = Column(String, nullable=True) # e.g. "company-sql-model", "qwen2.5-coder:3b", "gpt-4o"
+    api_key_encrypted = Column(String, nullable=True) # Encrypted secret string (never exposed raw via GET)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
+
+
+class HadilDBDirectory(MetadataBase):
+    __tablename__ = "hadil_db_directories"
+
+    id = Column(Integer, primary_key=True, index=True)
+    path = Column(String, unique=True, index=True, nullable=False)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+
+class HadilPolicyDocument(MetadataBase):
+
+    __tablename__ = "hadil_policy_documents"
+
+    id = Column(String, primary_key=True, index=True)
+    filename = Column(String, nullable=False)
+    doc_type = Column(String, nullable=False) # "pdf", "txt", "docx"
+    scope = Column(String, nullable=False, index=True) # "GLOBAL" or "DATABASE:<database_id>"
+    upload_timestamp = Column(DateTime, default=datetime.datetime.utcnow)
+    uploaded_by_user_id = Column(Integer, ForeignKey("hadil_users.id"), nullable=False)
+    indexing_status = Column(String, nullable=False, default="PENDING") # "INDEXED", "FAILED", "PENDING"
+    chunk_count = Column(Integer, default=0)
+    embedding_model = Column(String, nullable=False, default="all-MiniLM-L6-v2")
+    file_path = Column(String, nullable=False)
+
+    uploaded_by = relationship("HadilUser")
+
+
 # Password hashing helper using SHA-256 with salt (standard library fallback, upgradeable to Argon2/bcrypt)
+
 def hash_password(password: str, salt: Optional[str] = None) -> str:
     if not salt:
         salt = secrets.token_hex(16)
@@ -143,12 +202,28 @@ class MetadataDatabaseManager:
 
     def init_db(self):
         MetadataBase.metadata.create_all(bind=self.engine)
+        # Migration: Ensure connection_uri_encrypted column exists on hadil_databases table
+        try:
+            with self.engine.connect() as conn:
+                conn.execute(text("ALTER TABLE hadil_databases ADD COLUMN connection_uri_encrypted TEXT"))
+                conn.commit()
+        except Exception:
+            pass
+
 
     def get_session(self) -> Session:
         return self._SessionLocal()
 
-metadata_db_path = os.getenv("HADIL_METADATA_DB", "./hadil_metadata.db")
+from utils.path_resolver import resolve_user_data_resource
+
+metadata_db_env = os.getenv("HADIL_METADATA_DB")
+if metadata_db_env:
+    metadata_db_path = os.path.abspath(metadata_db_env)
+else:
+    metadata_db_path = resolve_user_data_resource("hadil_metadata.db")
+
 metadata_manager = MetadataDatabaseManager(db_path=metadata_db_path)
+
 
 def get_metadata_db():
     db = metadata_manager._SessionLocal()

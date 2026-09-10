@@ -8,7 +8,7 @@ import {
   XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer
 } from 'recharts';
 
-const COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899'];
+const COLORS = ['#10b981', '#059669', '#34d399', '#6ee7b7', '#14b8a6', '#0d9488'];
 
 export default function ExpandedWidgetModal({ widget, onClose, onRefresh }) {
   const [activeViz, setActiveViz] = useState(widget.type || 'table');
@@ -47,7 +47,7 @@ export default function ExpandedWidgetModal({ widget, onClose, onRefresh }) {
             <XAxis dataKey={xKey} axisLine={false} tickLine={false} tick={{ fill: '#64748b', fontSize: 12 }} />
             <YAxis axisLine={false} tickLine={false} tick={{ fill: '#64748b', fontSize: 12 }} />
             <Tooltip contentStyle={{ backgroundColor: '#1e293b', color: '#fff', borderRadius: '12px', border: 'none' }} />
-            <Line type="monotone" dataKey={yKey} stroke="#2563eb" strokeWidth={3} dot={{ r: 5, fill: '#2563eb' }} />
+            <Line type="monotone" dataKey={yKey} stroke="#10b981" strokeWidth={3} dot={{ r: 5, fill: '#10b981' }} />
           </LineChart>
         </ResponsiveContainer>
       );
@@ -79,7 +79,7 @@ export default function ExpandedWidgetModal({ widget, onClose, onRefresh }) {
             <XAxis dataKey={xKey} axisLine={false} tickLine={false} tick={{ fill: '#64748b', fontSize: 12 }} />
             <YAxis axisLine={false} tickLine={false} tick={{ fill: '#64748b', fontSize: 12 }} />
             <Tooltip contentStyle={{ backgroundColor: '#1e293b', color: '#fff', borderRadius: '12px', border: 'none' }} />
-            <Bar dataKey={yKey} fill="#2563eb" radius={[6, 6, 0, 0]} />
+            <Bar dataKey={yKey} fill="#10b981" radius={[6, 6, 0, 0]} />
           </BarChart>
         </ResponsiveContainer>
       );
@@ -118,7 +118,7 @@ export default function ExpandedWidgetModal({ widget, onClose, onRefresh }) {
         {/* Modal Header */}
         <div className="px-6 py-4 border-b border-slate-200 flex items-center justify-between bg-slate-50">
           <div className="flex items-center gap-3">
-            <div className="w-3 h-3 rounded-full bg-blue-600" />
+            <div className="w-3 h-3 rounded-full bg-emerald-600" />
             <div>
               <h3 className="text-base font-extrabold text-slate-900">{widget.title || "Expanded Intelligence View"}</h3>
               <p className="text-xs text-slate-500 font-medium">"{widget.original_request}"</p>
@@ -128,15 +128,15 @@ export default function ExpandedWidgetModal({ widget, onClose, onRefresh }) {
           <div className="flex items-center gap-2">
             {/* Viz switcher */}
             <div className="flex items-center bg-slate-200/70 p-1 rounded-lg">
-              <button onClick={() => setActiveViz('table')} className={`px-2.5 py-1 rounded text-xs font-bold ${activeViz === 'table' ? 'bg-white text-blue-600 shadow-xs' : 'text-slate-600'}`}>Table</button>
-              <button onClick={() => setActiveViz('bar')} className={`px-2.5 py-1 rounded text-xs font-bold ${activeViz === 'bar' ? 'bg-white text-blue-600 shadow-xs' : 'text-slate-600'}`}>Bar</button>
-              <button onClick={() => setActiveViz('line')} className={`px-2.5 py-1 rounded text-xs font-bold ${activeViz === 'line' ? 'bg-white text-blue-600 shadow-xs' : 'text-slate-600'}`}>Line</button>
-              <button onClick={() => setActiveViz('pie')} className={`px-2.5 py-1 rounded text-xs font-bold ${activeViz === 'pie' ? 'bg-white text-blue-600 shadow-xs' : 'text-slate-600'}`}>Pie</button>
+              <button onClick={() => setActiveViz('table')} className={`px-2.5 py-1 rounded text-xs font-bold ${activeViz === 'table' ? 'bg-white text-emerald-600 shadow-xs' : 'text-slate-600'}`}>Table</button>
+              <button onClick={() => setActiveViz('bar')} className={`px-2.5 py-1 rounded text-xs font-bold ${activeViz === 'bar' ? 'bg-white text-emerald-600 shadow-xs' : 'text-slate-600'}`}>Bar</button>
+              <button onClick={() => setActiveViz('line')} className={`px-2.5 py-1 rounded text-xs font-bold ${activeViz === 'line' ? 'bg-white text-emerald-600 shadow-xs' : 'text-slate-600'}`}>Line</button>
+              <button onClick={() => setActiveViz('pie')} className={`px-2.5 py-1 rounded text-xs font-bold ${activeViz === 'pie' ? 'bg-white text-emerald-600 shadow-xs' : 'text-slate-600'}`}>Pie</button>
             </div>
 
             <button
               onClick={handleRefresh}
-              className={`p-2 text-slate-500 hover:text-slate-900 hover:bg-slate-200 rounded-lg transition-colors ${refreshing ? 'animate-spin text-blue-600' : ''}`}
+              className={`p-2 text-slate-500 hover:text-slate-900 hover:bg-slate-200 rounded-lg transition-colors ${refreshing ? 'animate-spin text-emerald-600' : ''}`}
               title="Refresh Widget Data"
             >
               <RefreshCw className="w-4 h-4" />
@@ -154,8 +154,8 @@ export default function ExpandedWidgetModal({ widget, onClose, onRefresh }) {
         {/* Modal Content */}
         <div className="p-6 overflow-y-auto space-y-6 flex-1 custom-scrollbar">
           {widget.interpretedAnswer && (
-            <div className="p-4 rounded-xl bg-blue-50 border border-blue-100 text-blue-900 text-sm font-semibold flex items-start gap-2.5">
-              <Sparkles className="w-5 h-5 text-blue-600 shrink-0 mt-0.5" />
+            <div className="p-4 rounded-xl bg-emerald-50 border border-emerald-100 text-emerald-900 text-sm font-semibold flex items-start gap-2.5">
+              <Sparkles className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5" />
               <span>{widget.interpretedAnswer}</span>
             </div>
           )}
@@ -182,7 +182,7 @@ export default function ExpandedWidgetModal({ widget, onClose, onRefresh }) {
           {widget.sql && (
             <div className="p-4 bg-slate-900 rounded-xl text-xs font-mono space-y-1.5">
               <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider flex items-center gap-1.5">
-                <Database className="w-3.5 h-3.5 text-blue-400" /> Grounded SQL Query
+                <Database className="w-3.5 h-3.5 text-emerald-400" /> Grounded SQL Query
               </span>
               <p className="text-emerald-400 leading-relaxed font-mono">{widget.sql}</p>
             </div>

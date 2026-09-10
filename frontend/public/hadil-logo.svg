@@ -1,0 +1,58 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 270" width="100%" height="100%">
+  <defs>
+    <!-- Background glow -->
+    <radialGradient id="emeraldGlow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#10B981" stop-opacity="0.3"/>
+      <stop offset="100%" stop-color="#059669" stop-opacity="0"/>
+    </radialGradient>
+    
+    <!-- Top & bottom cylinder gradient -->
+    <linearGradient id="cylinderGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#059669"/>
+      <stop offset="50%" stop-color="#10B981"/>
+      <stop offset="100%" stop-color="#047857"/>
+    </linearGradient>
+
+    <!-- Side pillars gradient -->
+    <linearGradient id="pillarGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#10B981"/>
+      <stop offset="50%" stop-color="#059669"/>
+      <stop offset="100%" stop-color="#047857"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Left Green Side Pillar -->
+  <path d="M 32,54 Q 30,135 32,216 L 62,216 Q 60,135 62,54 Z" fill="url(#pillarGrad)" />
+  <path d="M 32,54 L 62,54 L 62,59 L 32,59 Z" fill="#064E3B" />
+  <path d="M 32,211 L 62,211 L 62,216 L 32,216 Z" fill="#064E3B" />
+
+  <!-- Right Green Side Pillar -->
+  <path d="M 238,54 Q 240,135 238,216 L 268,216 Q 270,135 268,54 Z" fill="url(#pillarGrad)" />
+  <path d="M 238,54 L 268,54 L 268,59 L 238,59 Z" fill="#064E3B" />
+  <path d="M 238,211 L 268,211 L 268,216 L 238,216 Z" fill="#064E3B" />
+
+  <!-- Main Database Cylinder Outline -->
+  <!-- Top Oval -->
+  <ellipse cx="150" cy="54" rx="90" ry="34" fill="#FFFFFF" stroke="#000000" stroke-width="12"/>
+  
+  <!-- Cylinder Wall (White background) -->
+  <rect x="60" y="54" width="180" height="162" fill="#FFFFFF" />
+
+  <!-- Bottom Oval -->
+  <ellipse cx="150" cy="216" rx="90" ry="34" fill="#FFFFFF" stroke="#000000" stroke-width="12"/>
+
+  <!-- Left/Right Wall Strokes -->
+  <line x1="60" y1="54" x2="60" y2="216" stroke="#000000" stroke-width="12" />
+  <line x1="240" y1="54" x2="240" y2="216" stroke="#000000" stroke-width="12" />
+
+  <!-- Middle Disc with Hadil Text -->
+  <g>
+    <!-- Outer stroke for middle disc -->
+    <ellipse cx="150" cy="135" rx="90" ry="34" fill="#10B981" stroke="#000000" stroke-width="12"/>
+    <!-- Text Hadil inside middle disc -->
+    <text x="150" y="145" font-family="'Times New Roman', Georgia, serif" font-size="38" font-weight="bold" fill="#FFFFFF" text-anchor="middle" letter-spacing="1">Hadil</text>
+  </g>
+
+  <!-- Re-render Top Oval stroke on top so depth looks clean -->
+  <ellipse cx="150" cy="54" rx="90" ry="34" fill="none" stroke="#000000" stroke-width="12"/>
+</svg>

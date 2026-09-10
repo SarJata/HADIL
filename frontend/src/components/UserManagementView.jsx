@@ -101,7 +101,7 @@ export default function UserManagementView({ databases = [], activeDbId = '', cu
       case 'ADMIN':
         return 'bg-purple-950/80 text-purple-300 border-purple-800/80';
       case 'EDITOR':
-        return 'bg-blue-950/80 text-blue-300 border-blue-800/80';
+        return 'bg-emerald-950/80 text-emerald-300 border-emerald-800/80';
       case 'VIEWER':
         return 'bg-slate-900 text-slate-300 border-slate-700';
       default:
@@ -132,7 +132,7 @@ export default function UserManagementView({ databases = [], activeDbId = '', cu
           onClick={fetchUsers}
           className="px-4 py-2 rounded-xl bg-[#131A2B] hover:bg-[#1A2340] text-slate-200 hover:text-white text-xs font-bold border border-[#1F2A44] flex items-center gap-2 transition-all cursor-pointer shadow-md"
         >
-          <RefreshCw className={`w-3.5 h-3.5 text-blue-400 ${loading ? 'animate-spin' : ''}`} />
+          <RefreshCw className={`w-3.5 h-3.5 text-emerald-400 ${loading ? 'animate-spin' : ''}`} />
           <span>Refresh Users</span>
         </button>
       </div>
@@ -171,7 +171,7 @@ export default function UserManagementView({ databases = [], activeDbId = '', cu
           {/* Card 1: Create New User */}
           <div className="bg-[#131A2B] border border-[#1F2A44] rounded-2xl p-6 space-y-4 shadow-xl">
             <div className="flex items-center gap-2 pb-2 border-b border-[#1F2A44]">
-              <UserPlus className="w-4 h-4 text-blue-400" />
+              <UserPlus className="w-4 h-4 text-emerald-400" />
               <h3 className="text-sm font-black text-white uppercase tracking-wider">
                 Create New User
               </h3>
@@ -188,7 +188,7 @@ export default function UserManagementView({ databases = [], activeDbId = '', cu
                   onChange={(e) => setNewUsername(e.target.value)}
                   placeholder="e.g. janesmith"
                   required
-                  className="w-full bg-[#0F1626] border border-[#1F2A44] rounded-xl px-3.5 py-2 text-xs text-slate-100 font-medium placeholder-slate-500 focus:outline-none focus:border-blue-500"
+                  className="w-full bg-[#0F1626] border border-[#1F2A44] rounded-xl px-3.5 py-2 text-xs text-slate-100 font-medium placeholder-slate-500 focus:outline-none focus:border-emerald-500"
                 />
               </div>
 
@@ -202,7 +202,7 @@ export default function UserManagementView({ databases = [], activeDbId = '', cu
                   onChange={(e) => setNewPassword(e.target.value)}
                   placeholder="Minimum 6 characters"
                   required
-                  className="w-full bg-[#0F1626] border border-[#1F2A44] rounded-xl px-3.5 py-2 text-xs text-slate-100 font-medium placeholder-slate-500 focus:outline-none focus:border-blue-500"
+                  className="w-full bg-[#0F1626] border border-[#1F2A44] rounded-xl px-3.5 py-2 text-xs text-slate-100 font-medium placeholder-slate-500 focus:outline-none focus:border-emerald-500"
                 />
               </div>
 
@@ -229,7 +229,7 @@ export default function UserManagementView({ databases = [], activeDbId = '', cu
               <button
                 type="submit"
                 disabled={actionLoading}
-                className="w-full py-2.5 bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs rounded-xl transition-all flex items-center justify-center gap-2 cursor-pointer shadow-md shadow-blue-900/30 disabled:opacity-50"
+                className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs rounded-xl transition-all flex items-center justify-center gap-2 cursor-pointer shadow-md shadow-emerald-900/30 disabled:opacity-50"
               >
                 {actionLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <UserPlus className="w-3.5 h-3.5" />}
                 <span>Create User</span>

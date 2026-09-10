@@ -1,7 +1,14 @@
-from fastapi.testclient import TestClient
 import os
+import sys
 import json
 
+# Force isolated test metadata database to avoid wiping live developer metadata DB
+os.environ["HADIL_METADATA_DB"] = "./test_hadil_metadata.db"
+
+# Ensure backend directory is in sys.path
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
+from fastapi.testclient import TestClient
 from main import app
 from database.metadata_db import metadata_manager, MetadataBase, HadilUser
 from services.metadata_service import metadata_service
@@ -38,9 +45,14 @@ def setup_test_environment():
     metadata_service.assign_user_role(scoped_user.id, "db_a.db", "ADMIN")
     metadata_service.assign_user_role(scoped_user.id, "db_b.db", "VIEWER")
 
-    # Ensure active db is db_a.db by default
+    # Ensure active db is db_a.db by default and engine is initialized
     db_manager.current_db_id = "db_a.db"
     db_manager.current_db_name = "Database A"
+    db_manager.custom_connection_uri = "sqlite:///:memory:"
+    db_manager._initialize_engine()
+
+def setup_module(module):
+    setup_test_environment()
 
 def get_auth_header(username: str, password: str = "password123"):
     response = client.post("/api/auth/login", json={"username": username, "password": password})

@@ -1,10 +1,17 @@
 @import "tailwindcss";
 
+@layer utilities {
+  .font-serif-brand {
+    font-family: 'Baskerville Old Face', 'Baskerville', 'Garamond', 'Times New Roman', serif;
+  }
+}
+
 @layer base {
   body {
     @apply bg-[#f8faf9] text-slate-900;
   }
 }
+
 
 @layer components {
   .glass-card {

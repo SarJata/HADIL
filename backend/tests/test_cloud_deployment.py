@@ -248,6 +248,85 @@ class TestFrontendApiUrlAndSqliteUx(unittest.TestCase):
         self.assertIn("capabilities.sqlite_file_location", src)
 
 
+class TestRenderAsgiImportPath(unittest.TestCase):
+    """Render cwd is the repo root. backend/main.py is not importable as `main` unless backend is on sys.path."""
+
+    def test_render_yaml_start_command_uses_app_dir_not_backend_main(self):
+        yaml_path = os.path.join(REPO_ROOT, "render.yaml")
+        with open(yaml_path, encoding="utf-8") as handle:
+            start_lines = [
+                line.strip()
+                for line in handle
+                if line.strip().startswith("startCommand:")
+            ]
+        self.assertEqual(len(start_lines), 1)
+        start = start_lines[0]
+        self.assertIn("uvicorn main:app --app-dir backend", start)
+        self.assertNotIn("backend.main:app", start)
+
+    def test_repo_root_cannot_import_main_without_backend_on_path(self):
+        script = (
+            "import os, sys\n"
+            "os.environ.pop('PYTHONPATH', None)\n"
+            "from uvicorn.importer import import_from_string, ImportFromStringError\n"
+            "try:\n"
+            "    import_from_string('main:app')\n"
+            "except ImportFromStringError as exc:\n"
+            "    assert 'Could not import module' in str(exc) and 'main' in str(exc)\n"
+            "    print('MAIN_MISSING_OK')\n"
+            "else:\n"
+            "    raise SystemExit('expected main import to fail from repo root')\n"
+            "try:\n"
+            "    import_from_string('backend.main:app')\n"
+            "except ModuleNotFoundError as exc:\n"
+            "    assert exc.name == 'config'\n"
+            "    print('BACKEND_MAIN_CONFIG_FAIL_OK')\n"
+            "else:\n"
+            "    raise SystemExit('expected backend.main:app to fail on config')\n"
+        )
+        env = os.environ.copy()
+        env.pop("PYTHONPATH", None)
+        result = subprocess.run(
+            [sys.executable, "-c", script],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("MAIN_MISSING_OK", result.stdout)
+        self.assertIn("BACKEND_MAIN_CONFIG_FAIL_OK", result.stdout)
+
+    def test_app_dir_backend_imports_and_exposes_app(self):
+        backend_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        script = (
+            "import os, sys\n"
+            "os.environ['HADIL_DEPLOYMENT_MODE'] = 'cloud'\n"
+            "os.environ['HADIL_JWT_SECRET'] = 'cloud-test-secret-not-default-value'\n"
+            "os.environ['HADIL_METADATA_DB'] = './test_cloud_startup_metadata.db'\n"
+            "os.environ.pop('PYTHONPATH', None)\n"
+            f"sys.path.insert(0, {backend_dir!r})\n"
+            "from uvicorn.importer import import_from_string\n"
+            "app = import_from_string('main:app')\n"
+            "assert app.__class__.__name__ == 'FastAPI'\n"
+            "print('APP_DIR_IMPORT_OK')\n"
+        )
+        env = os.environ.copy()
+        env.pop("PYTHONPATH", None)
+        env["HADIL_DEPLOYMENT_MODE"] = "cloud"
+        env["HADIL_JWT_SECRET"] = "cloud-test-secret-not-default-value"
+        env["HADIL_METADATA_DB"] = "./test_cloud_startup_metadata.db"
+        result = subprocess.run(
+            [sys.executable, "-c", script],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("APP_DIR_IMPORT_OK", result.stdout)
+
+
 class TestCloudStartupIsolation(unittest.TestCase):
     def test_import_main_in_cloud_does_not_load_windows_gui(self):
         backend_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))

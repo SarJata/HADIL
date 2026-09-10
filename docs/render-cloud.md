@@ -4,11 +4,13 @@ This branch keeps the Windows V1 desktop application intact. Cloud mode is selec
 
 ## Start command
 
-From the repository root, with `PYTHONPATH=backend`:
+Render's working directory is the repository root. The FastAPI module is `backend/main.py`, and that file (and the rest of the backend) imports sibling packages as top-level names (`config`, `routes`, `database`, …). The start command therefore keeps `main:app` and tells Uvicorn to put `backend/` on `sys.path`:
 
 ```text
-uvicorn main:app --host 0.0.0.0 --port $PORT
+uvicorn main:app --app-dir backend --host 0.0.0.0 --port $PORT
 ```
+
+Do not use `uvicorn backend.main:app`; that fails with `No module named 'config'`. Do not depend on the `PYTHONPATH` Blueprint env var alone — Render may run the start command from the repo root without applying it.
 
 Do not start `HADIL.exe`, `hadil_runtime.py` desktop mode, tkinter splash, or the Windows tray on Render.
 

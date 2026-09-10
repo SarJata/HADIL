@@ -4,13 +4,62 @@ import logging
 import datetime
 from sqlalchemy.orm import Session
 from sqlalchemy import text, inspect
-from openai import OpenAI
 from database import models
 from database.schema_extractor import get_filtered_tables, get_filtered_schema
 from database.manager import db_manager
+from ai_modules.providers import get_llm_provider
 
 logger = logging.getLogger(__name__)
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
+
+def get_database_stats():
+    """
+    Computes table count, total record count across non-internal tables, and total foreign key relations.
+    Handles empty databases, missing tables, or execution errors gracefully.
+    """
+    engine = db_manager.engine
+    if not engine:
+        return {"table_count": 0, "record_count": 0, "relation_count": 0}
+    
+    try:
+        tables = get_filtered_tables(engine)
+        if not tables:
+            return {"table_count": 0, "record_count": 0, "relation_count": 0}
+
+        inspector = inspect(engine)
+        relation_count = 0
+        total_records = 0
+
+        # Count foreign key relations
+        for t in tables:
+            try:
+                fks = inspector.get_foreign_keys(t)
+                relation_count += len(fks)
+            except Exception:
+                pass
+
+        # Count rows per table safely
+        with engine.connect() as conn:
+            for t in tables:
+                try:
+                    # Quote table name according to dialect
+                    quoted_table = engine.dialect.identifier_preparer.quote(t)
+                    res = conn.execute(text(f"SELECT COUNT(*) FROM {quoted_table}"))
+                    count = res.scalar()
+                    if count and isinstance(count, int):
+                        total_records += count
+                except Exception as row_err:
+                    logger.debug(f"Could not count rows for table {t}: {row_err}")
+
+        return {
+            "table_count": len(tables),
+            "record_count": total_records,
+            "relation_count": relation_count
+        }
+    except Exception as e:
+        logger.warning(f"Failed to compute database stats: {e}")
+        return {"table_count": 0, "record_count": 0, "relation_count": 0}
+
 
 def run_onboarding(db_name: str):
     """
@@ -19,6 +68,11 @@ def run_onboarding(db_name: str):
     """
     logger.info(f"Running onboarding for database: {db_name}")
     
+    tables = get_filtered_tables()
+    if not tables:
+        logger.info(f"Database {db_name} contains no tables. Skipping AI generation.")
+        return None
+
     # 1. Check if insights already exist to avoid redundant AI calls
     db = db_manager.get_session()
     try:
@@ -59,17 +113,9 @@ JSON Structure:
 }}
 """
 
-        response = client.chat.completions.create(
-            model="gpt-4o",
-            messages=[
-                {"role": "system", "content": "You are a database expert focused on discoverability and analytics onboarding."},
-                {"role": "user", "content": prompt}
-            ],
-            temperature=0.7,
-            response_format={"type": "json_object"}
-        )
-        
-        result = json.loads(response.choices[0].message.content.strip())
+        system_prompt = "You are a database expert focused on discoverability and analytics onboarding."
+        provider = get_llm_provider("generator")
+        result = provider.generate_json(system_prompt, prompt)
         summary = result.get("summary", "No summary available.")
         suggestions = result.get("suggested_queries", [])
 
@@ -103,17 +149,33 @@ JSON Structure:
         db.close()
 
 def get_onboarding_insights(db_name: str):
+    tables = get_filtered_tables()
+    stats = get_database_stats()
+    
+    if not tables:
+        return {
+            "database_name": db_name,
+            "summary": "No tables discovered in this database.",
+            "suggested_queries": [],
+            "generated_at": None,
+            "stats": stats
+        }
+
     db = db_manager.get_session()
     try:
-        insight = db.query(models.HadilDatabaseInsight).filter(
-            models.HadilDatabaseInsight.database_name == db_name
-        ).first()
-        if insight:
-            return {
-                "summary": insight.generated_summary,
-                "suggested_queries": json.loads(insight.suggested_queries),
-                "generated_at": insight.generated_at
-            }
+        if db:
+            insight = db.query(models.HadilDatabaseInsight).filter(
+                models.HadilDatabaseInsight.database_name == db_name
+            ).first()
+            if insight:
+                return {
+                    "database_name": db_name,
+                    "summary": insight.generated_summary,
+                    "suggested_queries": json.loads(insight.suggested_queries),
+                    "generated_at": insight.generated_at,
+                    "stats": stats
+                }
         return None
     finally:
-        db.close()
+        if db:
+            db.close()

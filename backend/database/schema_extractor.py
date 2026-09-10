@@ -1,29 +1,48 @@
 from sqlalchemy import inspect
 from database.session import get_engine
 
-def get_filtered_tables():
-    inspector = inspect(get_engine())
+HADIL_SYSTEM_TABLES = {
+    "hadil_query_history",
+    "hadil_database_insights",
+}
+
+HADIL_SYSTEM_TABLE_PREFIXES = ("hadil_", "meta_")
+
+def is_system_table(table_name: str) -> bool:
+    """
+    Centralized check to determine if a table is a HADIL internal/system table.
+    System tables are excluded from all user-facing schema metadata discovery.
+    """
+    if not table_name:
+        return False
+    t_lower = table_name.lower()
+    if t_lower in HADIL_SYSTEM_TABLES:
+        return True
+    return t_lower.startswith(HADIL_SYSTEM_TABLE_PREFIXES)
+
+def get_filtered_tables(engine=None):
+    target_engine = engine if engine is not None else get_engine()
+    if not target_engine:
+        return []
+    inspector = inspect(target_engine)
     all_tables = inspector.get_table_names()
     return [
         t for t in all_tables 
-        if not (t == "hadil_query_history" or t.startswith("hadil_") or t.startswith("meta_"))
+        if not is_system_table(t)
     ]
 
 def get_filtered_schema():
     """
-    Returns a text representation of the filtered database schema (business tables only).
+    Returns a compact, token-efficient text representation of the filtered database schema.
     """
     inspector = inspect(get_engine())
     tables = get_filtered_tables()
-    schema_text = "Database Schema (Filtered):\n"
-    
+    lines = ["Schema:"]
     for table_name in tables:
-        schema_text += f"\nTable: {table_name}\n"
         columns = inspector.get_columns(table_name)
-        for col in columns:
-            schema_text += f"- {col['name']} ({col['type']})\n"
-            
-    return schema_text
+        col_str = ", ".join([f"{c['name']} {str(c['type']).split('(')[0]}" for c in columns])
+        lines.append(f"{table_name}({col_str})")
+    return "\n".join(lines)
 
 def get_schema_context():
     """
@@ -36,7 +55,7 @@ def get_table_schema(table_name: str):
     """
     Returns detailed metadata for a specific table.
     """
-    if table_name == "hadil_query_history" or table_name.startswith("hadil_") or table_name.startswith("meta_"):
+    if is_system_table(table_name):
         return None
         
     inspector = inspect(get_engine())

@@ -1,14 +1,13 @@
 import os
 import json
 import logging
-from openai import OpenAI
 from dotenv import load_dotenv
 from database.schema_extractor import get_filtered_schema
+from ai_modules.providers import get_llm_provider
 
 load_dotenv(override=True)
 
 logger = logging.getLogger(__name__)
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 def generate_followup_questions(user_query: str, sql: str, context: dict, columns: list):
     """
@@ -19,8 +18,8 @@ def generate_followup_questions(user_query: str, sql: str, context: dict, column
     
     schema_context = get_filtered_schema()
     
-    prompt = f"""
-You are an expert data analyst assistant for HADIL. 
+    system_prompt = "You are a specialized analytical assistant that suggests context-aware follow-up questions."
+    user_prompt = f"""
 Based on the user's last query and the current database schema, suggest 3-5 intelligent, analytical follow-up questions that help the user explore the data further.
 
 Database Schema (Filtered):
@@ -55,17 +54,8 @@ Example Output:
 """
 
     try:
-        response = client.chat.completions.create(
-            model="gpt-4o",
-            messages=[
-                {"role": "system", "content": "You are a specialized analytical assistant that suggests context-aware follow-up questions."},
-                {"role": "user", "content": prompt}
-            ],
-            temperature=0.7,
-            response_format={"type": "json_object"}
-        )
-        
-        result = json.loads(response.choices[0].message.content.strip())
+        provider = get_llm_provider("generator")
+        result = provider.generate_json(system_prompt, user_prompt)
         suggestions = result.get("suggestions", [])
         
         # Limit to 5 suggestions
@@ -76,3 +66,4 @@ Example Output:
     except Exception as e:
         logger.error(f"Error generating follow-up questions: {e}")
         return []
+

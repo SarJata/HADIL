@@ -6,11 +6,28 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+def normalize_db_uri(uri: str) -> str:
+    """
+    Normalizes database connection URIs so MySQL connections consistently use PyMySQL
+    driver on Windows and avoid requiring MySQLdb (mysqlclient).
+    """
+    if not uri:
+        return uri
+    clean_uri = uri.strip()
+    if clean_uri.startswith("mysql+mysqldb://"):
+        return clean_uri.replace("mysql+mysqldb://", "mysql+pymysql://", 1)
+    elif clean_uri.startswith("mysql://"):
+        return clean_uri.replace("mysql://", "mysql+pymysql://", 1)
+    return clean_uri
+
+
+from utils.path_resolver import get_default_database_folder
+
 class DatabaseManager:
     def __init__(self):
-        self.db_folder = os.getenv("DATABASE_FOLDER", "./databases")
+        self.db_folder = get_default_database_folder()
         if not os.path.exists(self.db_folder):
-            os.makedirs(self.db_folder)
+            os.makedirs(self.db_folder, exist_ok=True)
             
         self.current_db_id = None
         self.current_db_name = None
@@ -18,31 +35,54 @@ class DatabaseManager:
         self._engine = None
         self._SessionLocal = None
         
-        # Initial discovery of local .db files
+        # Initial discovery: Prefer local SQLite database file if available, otherwise do not auto-connect remote RDBMS
         dbs = self.list_databases()
-        if dbs:
-            self.current_db_id = dbs[0]["id"]
-            self.current_db_name = dbs[0]["name"]
-            self._initialize_engine()
+        valid_local_dbs = [
+            d for d in dbs 
+            if d.get("type") == "sqlite" and self.get_database_config(d["id"]) is not None
+        ]
+        if valid_local_dbs:
+            try:
+                self.set_database(valid_local_dbs[0]["id"])
+            except Exception as e:
+                logger.warning(f"Could not auto-select initial local database '{valid_local_dbs[0]['id']}': {e}")
+
+
+
 
     def _initialize_engine(self):
         if self.custom_connection_uri:
-            url = self.custom_connection_uri
+            url = normalize_db_uri(self.custom_connection_uri)
             connect_args = {"check_same_thread": False} if url.startswith("sqlite") else {}
         elif self.current_db_id:
-            db_path = os.path.join(self.db_folder, self.current_db_id)
-            if not os.path.exists(db_path):
-                logger.error(f"Database file {db_path} not found.")
+            config = self.get_database_config(self.current_db_id)
+            if not config or not config.get("connection"):
+                logger.error(f"Database configuration for '{self.current_db_id}' not found.")
+                self._engine = None
+                self._SessionLocal = None
                 return
-            url = f"sqlite:///{db_path}"
-            connect_args = {"check_same_thread": False}
+            
+            if config["connection"] == "custom":
+                if not self.custom_connection_uri:
+                    logger.error(f"Custom connection URI missing for database '{self.current_db_id}'.")
+                    self._engine = None
+                    self._SessionLocal = None
+                    return
+                url = normalize_db_uri(self.custom_connection_uri)
+            else:
+                url = normalize_db_uri(config["connection"])
+
+            connect_args = {"check_same_thread": False} if url.startswith("sqlite") else {}
         else:
+            self._engine = None
+            self._SessionLocal = None
             return
 
         try:
             self._engine = create_engine(url, connect_args=connect_args)
             self._SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=self._engine)
             logger.info(f"Initialized engine for database: {self.current_db_name or self.current_db_id}")
+
             
             # Register in HADIL Metadata DB
             db_type = "sqlite" if url.startswith("sqlite") else self._engine.name
@@ -66,12 +106,14 @@ class DatabaseManager:
         Attempts to connect to a database URI safely without exposing passwords.
         """
         try:
-            connect_args = {"check_same_thread": False} if connection_uri.startswith("sqlite") else {}
-            temp_engine = create_engine(connection_uri, connect_args=connect_args)
+            normalized_uri = normalize_db_uri(connection_uri)
+            connect_args = {"check_same_thread": False} if normalized_uri.startswith("sqlite") else {}
+            temp_engine = create_engine(normalized_uri, connect_args=connect_args)
             with temp_engine.connect() as conn:
                 conn.execute(text("SELECT 1"))
             temp_engine.dispose()
             return {"success": True, "message": "Connection successful"}
+
         except Exception as e:
             logger.error(f"Test connection error: {e}")
             # Sanitize error message to prevent password leakage
@@ -94,7 +136,8 @@ class DatabaseManager:
         if not test_res["success"]:
             raise ValueError(test_res["message"])
 
-        self.custom_connection_uri = connection_uri
+        self.custom_connection_uri = normalize_db_uri(connection_uri)
+
         self.current_db_id = name or "custom_db"
         self.current_db_name = name or "Remote Database"
         self._initialize_engine()
@@ -105,30 +148,64 @@ class DatabaseManager:
         }
 
     def get_database_config(self, db_id: str) -> Optional[Dict]:
+        search_dirs = [self.db_folder]
+        try:
+            from services.metadata_service import metadata_service
+            for d in metadata_service.list_db_directories():
+                if d not in search_dirs and os.path.exists(d):
+                    search_dirs.append(d)
+        except Exception:
+            pass
+
+        for folder in search_dirs:
+            db_path = os.path.join(folder, db_id)
+            if os.path.exists(db_path):
+                return {
+                    "id": db_id,
+                    "name": db_id,
+                    "connection": f"sqlite:///{db_path}"
+                }
+
+        # Check registered metadata database table for remote RDBMS connections
+        try:
+            from services.metadata_service import metadata_service
+            meta_db = metadata_service.get_database(db_id)
+            if meta_db:
+                decrypted_uri = metadata_service.get_decrypted_connection_uri(db_id)
+                if decrypted_uri:
+                    return {
+                        "id": meta_db.id,
+                        "name": meta_db.name,
+                        "connection": decrypted_uri,
+                        "database_type": meta_db.database_type
+                    }
+        except Exception as e:
+            logger.warning(f"Could not check registered database metadata for {db_id}: {e}")
+
         if self.custom_connection_uri and self.current_db_id == db_id:
             return {
                 "id": self.current_db_id,
                 "name": self.current_db_name or self.current_db_id,
-                "connection": "custom"
+                "connection": self.custom_connection_uri
             }
-        db_path = os.path.join(self.db_folder, db_id)
-        if os.path.exists(db_path):
-            return {
-                "id": db_id,
-                "name": db_id,
-                "connection": f"sqlite:///{db_path}"
-            }
+
         return None
 
+
     def set_database(self, db_id: str):
-        # Reset custom connection if selecting a local .db file
-        self.custom_connection_uri = None
         db_config = self.get_database_config(db_id)
         if not db_config:
-            raise ValueError(f"Database {db_id} not found in {self.db_folder}")
-        
+            raise ValueError(f"Database {db_id} not found in configured database folders or metadata database.")
+
+        if db_config.get("connection") not in ["custom", None] and not db_config["connection"].startswith("sqlite"):
+            self.custom_connection_uri = db_config["connection"]
+        else:
+            self.custom_connection_uri = None
+
+
+
         self.current_db_id = db_id
-        self.current_db_name = db_id
+        self.current_db_name = db_config["name"]
         self._initialize_engine()
         return db_config
 
@@ -150,15 +227,48 @@ class DatabaseManager:
 
     def list_databases(self) -> List[Dict]:
         """
-        Scans the DATABASE_FOLDER for .db files.
+        Scans DATABASE_FOLDER, configured DB directories, and registered metadata databases.
         """
-        if not os.path.exists(self.db_folder):
-            return []
-            
-        files = [f for f in os.listdir(self.db_folder) if f.endswith(".db")]
-        return [
-            {"id": f, "name": f} 
-            for f in sorted(files)
-        ]
+        search_dirs = [self.db_folder]
+        try:
+            from services.metadata_service import metadata_service
+            for d in metadata_service.list_db_directories():
+                if d not in search_dirs and os.path.exists(d):
+                    search_dirs.append(d)
+        except Exception:
+            pass
+
+        seen_ids = set()
+        db_list = []
+
+        # 1. Local SQLite files
+        for folder in search_dirs:
+            if not os.path.exists(folder):
+                continue
+            files = [f for f in os.listdir(folder) if f.endswith(".db")]
+            for f in sorted(files):
+                if f not in seen_ids:
+                    seen_ids.add(f)
+                    db_list.append({"id": f, "name": f, "type": "sqlite"})
+
+        # 2. Persisted Remote / Custom RDBMS entries from HadilDatabase metadata table
+        try:
+            from services.metadata_service import metadata_service
+            registered = metadata_service.list_registered_databases()
+            for r in registered:
+                r_id = r["id"]
+                if r_id not in seen_ids:
+                    seen_ids.add(r_id)
+                    db_list.append({
+                        "id": r_id,
+                        "name": r["name"],
+                        "type": r.get("database_type", "custom")
+                    })
+        except Exception as e:
+            logger.warning(f"Could not load registered databases from metadata: {e}")
+
+        return sorted(db_list, key=lambda x: x["name"])
 
 db_manager = DatabaseManager()
+
+

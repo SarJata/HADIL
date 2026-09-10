@@ -1,70 +1,56 @@
 import os
 import json
 import logging
-from openai import OpenAI
 from dotenv import load_dotenv
+from ai_modules.providers import get_llm_provider
 from database.schema_extractor import get_filtered_schema
 
 load_dotenv(override=True)
 
 logger = logging.getLogger(__name__)
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-def verify_sql_intent(user_query: str, generated_sql: str):
+def verify_sql_intent(user_query: str, generated_sql: str, policy_context: str = ""):
     """
-    OpenAI-powered Verifier Module with dynamic schema awareness.
-    Completely separate call from the generator.
+    Verifier Module with dynamic schema awareness supporting multiple LLM providers.
+    Verifies that the executable SQL statement is well-formed, targets existing schema tables/columns,
+    aligns with the request context, and respects active policy constraints.
     """
     logger.info(f"Verifying SQL intent for: {user_query}")
     
     schema_context = get_filtered_schema()
     
-    prompt = f"""
-You are a security auditor for a database query layer. Your task is to verify if the generated SQL matches the user's natural language intent, using the provided database schema for context.
+    policy_prompt_block = ""
+    if policy_context and policy_context.strip():
+        policy_prompt_block = f"""\n{policy_context.strip()}\n\nNote on Policy Context:
+Evaluate if the executable SQL violates any explicit organizational policy rules contained above (e.g. attempting to delete protected data or bypassing retention rules). If a policy violation exists, set "is_valid": false and detail the policy conflict in "errors".\n"""
+
+    system_prompt = "SQL security auditor, schema verifier, and policy compliance evaluator."
+    user_prompt = f"""Verify executable SQL against database schema, request context, and organizational policy rules.
 
 {schema_context}
-
-User Query: "{user_query}"
-Generated SQL: "{generated_sql}"
-
-Tasks:
-1. Extract the core intent from the user query.
-2. Extract the intent implemented by the SQL.
-3. Check if the SQL uses correct tables and columns as defined in the schema.
-4. Compare the intents for any discrepancies (missing conditions, wrong filters, unintended data modification).
-
-Return your response as a valid JSON object with the following structure:
-{{
-    "is_valid": true/false,
-    "missing_conditions": ["list of strings or empty"],
-    "errors": ["list of strings or empty"],
-    "explanation": "concise explanation of why it is valid or not"
-}}
+{policy_prompt_block}
+User Query / Request: "{user_query}"
+Executable SQL: "{generated_sql}"
 
 Rules:
-- If the SQL is missing a WHERE condition mentioned in the query, mark as invalid.
-- If the SQL targets the wrong table or uses non-existent columns, mark as invalid.
-- If the SQL tries to do something other than SELECT (e.g. DELETE), mark as invalid.
-- Infer meaning from column names when comparing intent (e.g., a query for "revenue" might correctly use a column named "price" or "amount").
-- **LIMIT Clause Rules**: 
-    - A `LIMIT 100` clause is automatically added for raw row retrieval queries for safety; do NOT mark it as a discrepancy unless the user requested a specific different limit.
-    - Aggregate queries (COUNT, SUM, AVG, MIN, MAX), GROUP BY queries, and EXISTS queries should NOT have a LIMIT clause.
-- Do NOT reject valid queries if they correctly implement the user's intent using the available schema.
+- Mark is_valid: false if query targets non-existent tables or columns, or is structurally malformed.
+- Mark is_valid: false if query omits critical WHERE clauses or conditions required by the request or active policy rules.
+- Mark is_valid: false if executable SQL directly violates an active policy rule specified in [POLICY CONTEXT].
+- Safety LIMIT on raw row retrieval queries is VALID. Final outer LIMIT on top-N aggregate/GROUP BY queries (e.g. GROUP BY ... ORDER BY ... LIMIT N) is VALID and normal. Unsafe intermediate LIMIT inside subqueries or derived tables prior to outer aggregation is INVALID (mark is_valid: false).
+
+- Return JSON:
+{{
+    "is_valid": true,
+    "missing_conditions": [],
+    "errors": [],
+    "explanation": "concise explanation"
+}}
 """
 
+
     try:
-        response = client.chat.completions.create(
-            model="gpt-4o",
-            messages=[
-                {"role": "system", "content": "You are a specialized SQL auditor focused on intent verification."},
-                {"role": "user", "content": prompt}
-            ],
-            temperature=0,
-            response_format={"type": "json_object"}
-        )
-        
-        result_content = response.choices[0].message.content
-        result = json.loads(result_content)
+        provider = get_llm_provider("verifier")
+        result = provider.generate_json(system_prompt, user_prompt)
         
         logger.info(f"Verification result: {result}")
         return result

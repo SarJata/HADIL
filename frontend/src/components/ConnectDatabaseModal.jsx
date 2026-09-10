@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { 
   Database, Server, CheckCircle2, XCircle, Loader2, Sparkles, X, 
-  HardDrive, Key, Globe, ArrowRight, ShieldCheck
+  HardDrive, Key, Globe, ArrowRight, ShieldCheck, Upload, FolderPlus, FileCode
 } from 'lucide-react';
+import api from '../api';
 
 const DB_TEMPLATES = {
   postgresql: {
@@ -38,11 +39,22 @@ export default function ConnectDatabaseModal({
   onSelectDatabase, 
   onConnectCustomDatabase,
   availableDatabases = [],
-  currentDbId = ''
+  currentDbId = '',
+  userRole = ''
 }) {
-  const [activeTab, setActiveTab] = useState('local'); // 'local' | 'remote'
+  const isSuAdmin = userRole === 'MASTER_ADMIN';
+
+  const [activeTab, setActiveTab] = useState('local'); // 'local' | 'import' | 'remote'
   const [selectedLocalDb, setSelectedLocalDb] = useState(currentDbId || '');
   
+  // SuAdmin SQLite Import State
+  const [importMethod, setImportMethod] = useState('path'); // 'path' | 'upload'
+  const [existingFilePath, setExistingFilePath] = useState('');
+  const [importDisplayName, setImportDisplayName] = useState('');
+  const [selectedUploadFile, setSelectedUploadFile] = useState(null);
+  const [importing, setImporting] = useState(false);
+  const [importStatusMsg, setImportStatusMsg] = useState(null);
+
   // Remote Connection Form State
   const [dbType, setDbType] = useState('postgresql');
   const [connectionUri, setConnectionUri] = useState('');
@@ -51,7 +63,7 @@ export default function ConnectDatabaseModal({
   // Status states
   const [testing, setTesting] = useState(false);
   const [connecting, setConnecting] = useState(false);
-  const [testResult, setTestResult] = useState(null); // { success: boolean, message: string }
+  const [testResult, setTestResult] = useState(null);
   const [errorMsg, setErrorMsg] = useState(null);
 
   useEffect(() => {
@@ -61,7 +73,6 @@ export default function ConnectDatabaseModal({
   }, [availableDatabases, selectedLocalDb]);
 
   useEffect(() => {
-    // prefill helper template when switching db type
     setConnectionUri(DB_TEMPLATES[dbType]?.defaultUri || '');
     setTestResult(null);
     setErrorMsg(null);
@@ -126,6 +137,73 @@ export default function ConnectDatabaseModal({
     }
   };
 
+  const handleRegisterExistingPath = async () => {
+    if (!existingFilePath.trim()) {
+      setImportStatusMsg({ type: 'error', text: 'Please enter a valid SQLite file path.' });
+      return;
+    }
+
+    setImporting(true);
+    setImportStatusMsg(null);
+
+    try {
+      const res = await api.post('/admin/databases/register-path', {
+        file_path: existingFilePath.trim(),
+        display_name: importDisplayName.trim() || undefined
+      });
+
+      setImportStatusMsg({ type: 'success', text: res.data.message });
+      const regDb = res.data.database;
+      if (regDb && regDb.id) {
+        await onSelectDatabase(regDb.id);
+      }
+      setTimeout(() => onClose(), 1200);
+    } catch (err) {
+      setImportStatusMsg({ 
+        type: 'error', 
+        text: err.response?.data?.detail || 'Failed to register existing SQLite file path.' 
+      });
+    } finally {
+      setImporting(false);
+    }
+  };
+
+  const handleUploadDatabaseFile = async () => {
+    if (!selectedUploadFile) {
+      setImportStatusMsg({ type: 'error', text: 'Please select a SQLite database file (.db, .sqlite, .sqlite3) to upload.' });
+      return;
+    }
+
+    setImporting(true);
+    setImportStatusMsg(null);
+
+    try {
+      const formData = new FormData();
+      formData.append('file', selectedUploadFile);
+      if (importDisplayName.trim()) {
+        formData.append('display_name', importDisplayName.trim());
+      }
+
+      const res = await api.post('/admin/databases/upload', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' }
+      });
+
+      setImportStatusMsg({ type: 'success', text: res.data.message });
+      const regDb = res.data.database;
+      if (regDb && regDb.id) {
+        await onSelectDatabase(regDb.id);
+      }
+      setTimeout(() => onClose(), 1200);
+    } catch (err) {
+      setImportStatusMsg({ 
+        type: 'error', 
+        text: err.response?.data?.detail || 'Failed to upload and register SQLite database file.' 
+      });
+    } finally {
+      setImporting(false);
+    }
+  };
+
   return (
     <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4">
       <div className="bg-[#0F1626] border border-[#1F2A44] rounded-3xl w-full max-w-xl shadow-2xl overflow-hidden space-y-0 text-slate-200">
@@ -133,7 +211,7 @@ export default function ConnectDatabaseModal({
         {/* Header */}
         <div className="p-6 bg-[#131A2B] border-b border-[#1F2A44] flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-2xl bg-blue-600/20 border border-blue-500/40 flex items-center justify-center text-blue-400">
+            <div className="w-10 h-10 rounded-2xl bg-emerald-600/20 border border-emerald-500/40 flex items-center justify-center text-emerald-400">
               <Database className="w-5 h-5" />
             </div>
             <div>
@@ -152,27 +230,41 @@ export default function ConnectDatabaseModal({
         {/* Source Tabs */}
         <div className="flex border-b border-[#1F2A44] bg-[#0B0F19]">
           <button
-            onClick={() => { setActiveTab('local'); setErrorMsg(null); }}
-            className={`flex-1 py-3 px-4 text-xs font-bold flex items-center justify-center gap-2 border-b-2 transition-all ${
+            onClick={() => { setActiveTab('local'); setErrorMsg(null); setImportStatusMsg(null); }}
+            className={`flex-1 py-3 px-3 text-xs font-bold flex items-center justify-center gap-2 border-b-2 transition-all ${
               activeTab === 'local'
-                ? 'border-blue-500 text-blue-400 bg-[#131A2B]/50'
+                ? 'border-emerald-500 text-emerald-400 bg-[#131A2B]/50'
                 : 'border-transparent text-slate-400 hover:text-slate-200'
             }`}
           >
             <HardDrive className="w-4 h-4" />
-            <span>Local SQLite Databases</span>
+            <span>Registered Databases</span>
           </button>
 
+          {isSuAdmin && (
+            <button
+              onClick={() => { setActiveTab('import'); setErrorMsg(null); setImportStatusMsg(null); }}
+              className={`flex-1 py-3 px-3 text-xs font-bold flex items-center justify-center gap-2 border-b-2 transition-all ${
+                activeTab === 'import'
+                  ? 'border-emerald-500 text-emerald-400 bg-[#131A2B]/50'
+                  : 'border-transparent text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <FolderPlus className="w-4 h-4" />
+              <span>Import SQLite</span>
+            </button>
+          )}
+
           <button
-            onClick={() => { setActiveTab('remote'); setErrorMsg(null); }}
-            className={`flex-1 py-3 px-4 text-xs font-bold flex items-center justify-center gap-2 border-b-2 transition-all ${
+            onClick={() => { setActiveTab('remote'); setErrorMsg(null); setImportStatusMsg(null); }}
+            className={`flex-1 py-3 px-3 text-xs font-bold flex items-center justify-center gap-2 border-b-2 transition-all ${
               activeTab === 'remote'
-                ? 'border-blue-500 text-blue-400 bg-[#131A2B]/50'
+                ? 'border-emerald-500 text-emerald-400 bg-[#131A2B]/50'
                 : 'border-transparent text-slate-400 hover:text-slate-200'
             }`}
           >
             <Globe className="w-4 h-4" />
-            <span>Remote Database URI</span>
+            <span>Remote URI</span>
           </button>
         </div>
 
@@ -182,13 +274,14 @@ export default function ConnectDatabaseModal({
           {/* TAB 1: LOCAL SQLITE DATABASES */}
           {activeTab === 'local' && (
             <div className="space-y-4">
-              <label className="text-xs font-bold text-slate-300 block uppercase tracking-wider">
-                Discovered Databases in <code className="text-blue-400 font-mono">./backend/databases/</code>
+              <label className="text-xs font-bold text-slate-300 block uppercase tracking-wider flex items-center justify-between">
+                <span>Active Registered Databases</span>
+                <span className="text-[10px] text-emerald-400 font-mono font-normal tracking-normal lowercase">hadil runtime storage</span>
               </label>
 
               {availableDatabases.length === 0 ? (
                 <div className="p-4 rounded-xl bg-[#131A2B] border border-[#1F2A44] text-center text-slate-400 text-xs">
-                  No local .db files discovered in the backend folder.
+                  No registered database entries discovered in HADIL.
                 </div>
               ) : (
                 <div className="space-y-2 max-h-56 overflow-y-auto no-scrollbar">
@@ -200,16 +293,16 @@ export default function ConnectDatabaseModal({
                         onClick={() => setSelectedLocalDb(db.id)}
                         className={`w-full flex items-center justify-between p-3.5 rounded-xl border text-xs transition-all text-left ${
                           isSelected
-                            ? 'bg-blue-600/20 border-blue-500 text-white font-bold'
+                            ? 'bg-emerald-600/20 border-emerald-500 text-white font-bold'
                             : 'bg-[#131A2B] border-[#1F2A44] text-slate-300 hover:border-slate-600'
                         }`}
                       >
                         <div className="flex items-center gap-3">
-                          <Database className={`w-4 h-4 ${isSelected ? 'text-blue-400' : 'text-slate-400'}`} />
+                          <Database className={`w-4 h-4 ${isSelected ? 'text-emerald-400' : 'text-slate-400'}`} />
                           <span className="font-mono">{db.name}</span>
                         </div>
                         {isSelected && (
-                          <span className="text-[10px] font-mono bg-blue-950 text-blue-300 px-2 py-0.5 rounded border border-blue-800">
+                          <span className="text-[10px] font-mono bg-emerald-950 text-emerald-300 px-2 py-0.5 rounded border border-emerald-800">
                             Selected
                           </span>
                         )}
@@ -229,7 +322,7 @@ export default function ConnectDatabaseModal({
                 <button
                   onClick={handleConnectLocal}
                   disabled={connecting || !selectedLocalDb}
-                  className="px-5 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white text-xs font-bold flex items-center gap-2 transition-all cursor-pointer"
+                  className="px-5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white text-xs font-bold flex items-center gap-2 transition-all cursor-pointer"
                 >
                   {connecting ? <Loader2 className="w-4 h-4 animate-spin" /> : <ArrowRight className="w-4 h-4" />}
                   <span>Connect Database</span>
@@ -238,7 +331,140 @@ export default function ConnectDatabaseModal({
             </div>
           )}
 
-          {/* TAB 2: REMOTE DATABASE URI */}
+          {/* TAB 2: SUADMIN SQLITE IMPORT */}
+          {activeTab === 'import' && isSuAdmin && (
+            <div className="space-y-4">
+              <div>
+                <label className="text-xs font-bold text-slate-300 block mb-2 uppercase tracking-wider">
+                  Add Method
+                </label>
+                <div className="grid grid-cols-2 gap-3">
+                  <button
+                    onClick={() => { setImportMethod('path'); setImportStatusMsg(null); }}
+                    className={`p-3 rounded-xl border text-xs font-bold flex items-center justify-center gap-2 transition-all ${
+                      importMethod === 'path'
+                        ? 'bg-emerald-600/20 border-emerald-500 text-emerald-300'
+                        : 'bg-[#131A2B] border-[#1F2A44] text-slate-400 hover:text-slate-200'
+                    }`}
+                  >
+                    <FolderPlus className="w-4 h-4" />
+                    <span>Existing File Location</span>
+                  </button>
+
+                  <button
+                    onClick={() => { setImportMethod('upload'); setImportStatusMsg(null); }}
+                    className={`p-3 rounded-xl border text-xs font-bold flex items-center justify-center gap-2 transition-all ${
+                      importMethod === 'upload'
+                        ? 'bg-emerald-600/20 border-emerald-500 text-emerald-300'
+                        : 'bg-[#131A2B] border-[#1F2A44] text-slate-400 hover:text-slate-200'
+                    }`}
+                  >
+                    <Upload className="w-4 h-4" />
+                    <span>Upload Database File</span>
+                  </button>
+                </div>
+              </div>
+
+              <div>
+                <label className="text-xs font-bold text-slate-300 block mb-1 uppercase tracking-wider">
+                  Friendly Database Name (Optional)
+                </label>
+                <input
+                  type="text"
+                  placeholder="e.g. Sales Analytics DB"
+                  value={importDisplayName}
+                  onChange={(e) => setImportDisplayName(e.target.value)}
+                  className="w-full bg-[#131A2B] border border-[#1F2A44] rounded-xl px-3.5 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500"
+                />
+              </div>
+
+              {/* Method 1: Existing File Path */}
+              {importMethod === 'path' && (
+                <div className="space-y-2">
+                  <label className="text-xs font-bold text-slate-300 block uppercase tracking-wider">
+                    Server File Path
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="e.g. C:\data\finance.db or /var/data/sales.sqlite"
+                    value={existingFilePath}
+                    onChange={(e) => setExistingFilePath(e.target.value)}
+                    className="w-full bg-[#131A2B] border border-[#1F2A44] rounded-xl px-3.5 py-2.5 text-xs font-mono text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500"
+                  />
+                  <p className="text-[10px] text-slate-500">
+                    ℹ Path refers to an accessible SQLite file on the filesystem.
+                  </p>
+                </div>
+              )}
+
+              {/* Method 2: File Upload */}
+              {importMethod === 'upload' && (
+                <div className="space-y-2">
+                  <label className="text-xs font-bold text-slate-300 block uppercase tracking-wider">
+                    Select Local SQLite File (.db, .sqlite, .sqlite3)
+                  </label>
+                  <div className="p-4 bg-[#131A2B] border border-dashed border-[#1F2A44] rounded-xl text-center space-y-2">
+                    <input
+                      type="file"
+                      id="sqlite-upload-input"
+                      accept=".db,.sqlite,.sqlite3"
+                      onChange={(e) => setSelectedUploadFile(e.target.files[0] || null)}
+                      className="hidden"
+                    />
+                    <label
+                      htmlFor="sqlite-upload-input"
+                      className="inline-flex items-center gap-2 px-4 py-2 bg-[#1A2340] border border-[#2A385C] rounded-xl text-xs font-bold text-emerald-400 hover:text-emerald-300 hover:bg-[#222E54] cursor-pointer transition-all"
+                    >
+                      <Upload className="w-4 h-4" />
+                      <span>Choose Database File</span>
+                    </label>
+                    {selectedUploadFile ? (
+                      <p className="text-xs font-mono text-emerald-300">
+                        Selected: <span className="font-bold text-white">{selectedUploadFile.name}</span> ({Math.round(selectedUploadFile.size / 1024)} KB)
+                      </p>
+                    ) : (
+                      <p className="text-[11px] text-slate-500">No file selected yet</p>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* Status Message */}
+              {importStatusMsg && (
+                <div className={`p-3 rounded-xl border text-xs flex items-center gap-2.5 ${
+                  importStatusMsg.type === 'success'
+                    ? 'bg-emerald-950/60 border-emerald-800/80 text-emerald-300'
+                    : 'bg-rose-950/60 border-rose-800/80 text-rose-300'
+                }`}>
+                  {importStatusMsg.type === 'success' ? (
+                    <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                  ) : (
+                    <XCircle className="w-4 h-4 text-rose-400 shrink-0" />
+                  )}
+                  <span>{importStatusMsg.text}</span>
+                </div>
+              )}
+
+              <div className="pt-3 flex items-center justify-end gap-3 border-t border-[#1F2A44]">
+                <button
+                  onClick={onClose}
+                  className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-400 hover:text-white hover:bg-[#131A2B]"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={importMethod === 'path' ? handleRegisterExistingPath : handleUploadDatabaseFile}
+                  disabled={importing || (importMethod === 'path' ? !existingFilePath.trim() : !selectedUploadFile)}
+                  className="px-5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white text-xs font-bold flex items-center gap-2 transition-all cursor-pointer"
+                >
+                  {importing ? <Loader2 className="w-4 h-4 animate-spin" /> : <FolderPlus className="w-4 h-4" />}
+                  <span>{importMethod === 'path' ? 'Register File Location' : 'Upload & Register'}</span>
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* TAB 3: REMOTE DATABASE URI */}
           {activeTab === 'remote' && (
             <div className="space-y-4">
               <div>
@@ -252,7 +478,7 @@ export default function ConnectDatabaseModal({
                       onClick={() => setDbType(key)}
                       className={`p-2.5 rounded-xl border text-xs font-semibold transition-all text-center ${
                         dbType === key
-                          ? 'bg-blue-600/20 border-blue-500 text-blue-300'
+                          ? 'bg-emerald-600/20 border-emerald-500 text-emerald-300'
                           : 'bg-[#131A2B] border-[#1F2A44] text-slate-400 hover:text-slate-200'
                       }`}
                     >
@@ -271,7 +497,7 @@ export default function ConnectDatabaseModal({
                   placeholder="e.g. Production PostgreSQL DB"
                   value={displayName}
                   onChange={(e) => setDisplayName(e.target.value)}
-                  className="w-full bg-[#131A2B] border border-[#1F2A44] rounded-xl px-3.5 py-2.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-blue-500 transition-colors"
+                  className="w-full bg-[#131A2B] border border-[#1F2A44] rounded-xl px-3.5 py-2.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500 transition-colors"
                 />
               </div>
 
@@ -284,7 +510,7 @@ export default function ConnectDatabaseModal({
                   placeholder={DB_TEMPLATES[dbType]?.placeholder}
                   value={connectionUri}
                   onChange={(e) => setConnectionUri(e.target.value)}
-                  className="w-full bg-[#131A2B] border border-[#1F2A44] rounded-xl px-3.5 py-2.5 text-xs font-mono text-white placeholder-slate-500 focus:outline-none focus:border-blue-500 transition-colors"
+                  className="w-full bg-[#131A2B] border border-[#1F2A44] rounded-xl px-3.5 py-2.5 text-xs font-mono text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500 transition-colors"
                 />
                 <p className="text-[10px] text-slate-500 pt-1">
                   🔒 Passwords are used strictly for session authorization and never logged or exposed.
@@ -319,7 +545,7 @@ export default function ConnectDatabaseModal({
                 <button
                   onClick={handleTestConnection}
                   disabled={testing || !connectionUri.trim()}
-                  className="px-4 py-2 rounded-xl bg-[#131A2B] hover:bg-[#1A2340] border border-[#1F2A44] text-xs font-semibold text-blue-400 hover:text-blue-300 disabled:opacity-50 flex items-center gap-2 transition-all"
+                  className="px-4 py-2 rounded-xl bg-[#131A2B] hover:bg-[#1A2340] border border-[#1F2A44] text-xs font-semibold text-emerald-400 hover:text-emerald-300 disabled:opacity-50 flex items-center gap-2 transition-all"
                 >
                   {testing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <ShieldCheck className="w-3.5 h-3.5" />}
                   <span>Test Connection</span>
@@ -335,7 +561,7 @@ export default function ConnectDatabaseModal({
                   <button
                     onClick={handleConnectRemote}
                     disabled={connecting || !connectionUri.trim()}
-                    className="px-5 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white text-xs font-bold flex items-center gap-2 transition-all cursor-pointer"
+                    className="px-5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white text-xs font-bold flex items-center gap-2 transition-all cursor-pointer"
                   >
                     {connecting ? <Loader2 className="w-4 h-4 animate-spin" /> : <ArrowRight className="w-4 h-4" />}
                     <span>Connect</span>
@@ -350,3 +576,4 @@ export default function ConnectDatabaseModal({
     </div>
   );
 }
+

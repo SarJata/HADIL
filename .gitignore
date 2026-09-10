@@ -1,28 +1,142 @@
-# Environments
-.env
-.env.local
-.env.development.local
-.env.test.local
-.env.production.local
+# =============================================================================
+# HADIL .gitignore
+# Keep everything required to develop, test, reproduce, and build HADIL.
+# Ignore generated artifacts, runtime state, credentials, caches, and junk.
+# =============================================================================
+# Intentionally NOT ignored (required to reproduce Windows V1 and local dev):
+#   build.py, HADIL.spec, hadil.ico, backend/, frontend/src/, frontend/public/,
+#   frontend/package.json, frontend/package-lock.json, requirements.txt,
+#   backend/requirements.txt, backend/tests/
+# =============================================================================
+
+# ----- Python -----
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg
+*.egg-info/
+.installed.cfg
+.Python
+pip-log.txt
+pip-delete-this-directory.txt
+
+# ----- Virtual environments -----
 .venv/
 venv/
 env/
 ENV/
+.conda/
 
-# Databases
-*.db
-*.sqlite
-*.sqlite3
-backend/sales.db
+# ----- Testing / coverage -----
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.pytype/
+.tox/
+.nox/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+.ipynb_checkpoints/
+backend/experiment_*.json
 
-# Logs
-*.log
-backend/backend_log.txt
+# ----- Node / React / Vite -----
+node_modules/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+pnpm-debug.log*
+.vite/
+.cache/
+frontend/dist/
+frontend/dist-ssr/
 
-# OS generated files
+# ----- Build artifacts (PyInstaller / packaging) -----
+# Directory outputs only — do not ignore build.py
+/build/
+/dist/
+*.spec.bak
+warn-*.txt
+
+# ----- Databases -----
+# Local SQLite and engine sidecar files. Tests create temp DBs as needed.
+# Optional Chinook sample (not a required Git fixture): place at
+#   ./databases/chinook.db  (or $DATABASE_FOLDER/chinook.db)
+# Some tests use the id "chinook.db"; they do not require this file in Git.
+*.db
+*.sqlite
+*.sqlite3
+*.db-shm
+*.db-wal
+*.db-journal
+*.dump
+*.sql.gz
+
+# Local / uploaded database directories (runtime data, not source)
+/databases/
+/backend/databases/
+/test_data/
+/test_databases/
+/acceptance_data/
+/acceptance/
+
+# ----- Runtime state -----
+# Writable user data lives in %APPDATA%/HADIL or HADIL_DATA_DIR in production.
+# These paths also appear during local/dev runs.
+hadil_metadata.db
+hadil_runtime.log
+hadil_boot.log
+backend/backend_log.txt
+/storage/
+/backend/storage/
+faiss_index.bin
+chunk_metadata.json
+
+# ----- ML / model caches -----
+# MiniLM weights are a local Windows-build/RAG input (~87MB), not a Git artifact.
+# build.py / HADIL.spec still expect this directory on disk when building the EXE.
+models/all-MiniLM-L6-v2/
+.cache/huggingface/
+.cache/torch/
+.cache/sentence_transformers/
+huggingface/
+*.faiss
+
+# ----- Secrets / credentials -----
+.env
+.env.*
+*.env
+!.env.example
+!.env.template
+*.secret
+*.secrets
+*.key
+*.pem
+*.p12
+*.pfx
+credentials.*
+secrets.*
+secret.*
+
+# ----- Logs -----
+*.log
+logs/
+
+# ----- IDE -----
+.vscode/
+.idea/
+*.code-workspace
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.swp
+*.swo
+*~
+
+# ----- OS -----
 .DS_Store
 .DS_Store?
 ._*
@@ -30,44 +144,30 @@ yarn-error.log*
 .Trashes
 ehthumbs.db
 Thumbs.db
+Desktop.ini
 
-# Python
-__pycache__/
-*.py[cod]
-*$py.class
-*.so
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-share/python-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
-MANIFEST
-.pytest_cache/
-.coverage
-htmlcov/
-
-# Node
-node_modules/
-dist/
-dist-ssr/
+# ----- Temporary files -----
+*.tmp
+*.temp
+*.bak
+*.old
+*.orig
 *.local
 
-# IDEs and Editors
-.vscode/
-.idea/
-*.suo
-*.ntvs*
-*.njsproj
-*.sln
-*.sw?
+# ----- Acceptance / release working trees -----
+# Official HADIL V1 EXE is archived outside Git, not committed as source.
+*.exe
+/release/
+/releases/
+/artifacts/
+/tmp/
+/temp/
+HADIL_V1_*
+*_ACCEPTANCE
+*_ACCEPTANCE_DATA
+*_FINAL_ACCEPTANCE
+*_FINAL_DATA
+test-results/
+playwright-report/
+cypress/videos/
+cypress/screenshots/

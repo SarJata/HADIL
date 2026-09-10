@@ -1,0 +1,2 @@
+# Render / cloud entrypoint. Same runtime set as backend/requirements.txt.
+-r backend/requirements.txt

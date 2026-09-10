@@ -58,10 +58,7 @@ def enforce_permission(action: str):
     """
     def check_user_permission(current_user: Dict[str, Any] = Depends(get_current_user)):
         user_id = int(current_user["sub"])
-        active_db_id = db_manager.current_db_id
-
-        if not active_db_id:
-            raise HTTPException(status_code=400, detail="No database currently selected.")
+        active_db_id = db_manager.current_db_id or "sales.db"
 
         has_permission = metadata_service.check_permission(
             user_id=user_id,
@@ -77,3 +74,18 @@ def enforce_permission(action: str):
         return current_user
 
     return check_user_permission
+
+
+def enforce_suadmin(current_user: Dict[str, Any] = Depends(get_current_user)) -> Dict[str, Any]:
+    """
+    FastAPI Dependency that strictly enforces Master Administrator (SuAdmin) access.
+    """
+    user_id = int(current_user["sub"])
+    role = metadata_service.get_user_role_for_database(user_id, db_manager.current_db_id or "default")
+    if role != "MASTER_ADMIN":
+        raise HTTPException(
+            status_code=403,
+            detail=f"Access Denied: Administrative feature requires SuAdmin privileges. User '{current_user.get('username')}' is not authorized."
+        )
+    return current_user
+

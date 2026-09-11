@@ -616,5 +616,112 @@ class TestInitialAdminWithoutDefaultDatabase(unittest.TestCase):
             shutil.rmtree(empty_folder, ignore_errors=True)
 
 
+class TestMasterAdminAssignsDatabaseAdmin(unittest.TestCase):
+    """MASTER_ADMIN/SuAdmin may grant database-scoped ADMIN regardless of username."""
+
+    def test_user_management_ui_uses_master_admin_role_not_username(self):
+        path = os.path.join(REPO_ROOT, "frontend", "src", "components", "UserManagementView.jsx")
+        with open(path, encoding="utf-8") as handle:
+            src = handle.read()
+        self.assertNotIn("username === 'admin'", src)
+        self.assertIn("MASTER_ADMIN", src)
+        self.assertIn("Only a Master Admin can assign the ADMIN role to new users.", src)
+        app_path = os.path.join(REPO_ROOT, "frontend", "src", "App.jsx")
+        with open(app_path, encoding="utf-8") as handle:
+            app_src = handle.read()
+        self.assertIn("currentRole={role}", app_src)
+
+    def test_suadmin_not_named_admin_can_assign_admin_on_selected_database(self):
+        backend_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        fd, meta_path = tempfile.mkstemp(suffix="_hadil_rbac.db")
+        os.close(fd)
+        empty_folder = tempfile.mkdtemp(prefix="hadil_empty_dbs_")
+        try:
+            script = (
+                "import os, sys\n"
+                "os.environ['HADIL_DEPLOYMENT_MODE'] = 'cloud'\n"
+                "os.environ['HADIL_JWT_SECRET'] = 'cloud-test-secret-not-default-value'\n"
+                f"os.environ['HADIL_METADATA_DB'] = {meta_path!r}\n"
+                f"os.environ['DATABASE_FOLDER'] = {empty_folder!r}\n"
+                "os.environ.pop('HADIL_METADATA_DATABASE_URL', None)\n"
+                f"sys.path.insert(0, {backend_dir!r})\n"
+                "from fastapi.testclient import TestClient\n"
+                "from database.metadata_db import HadilUserDatabaseRole, HadilDatabase, MetadataBase, metadata_manager\n"
+                "from services.metadata_service import MetadataService\n"
+                "from database.manager import db_manager\n"
+                "from validators.security import create_access_token\n"
+                "from main import app\n"
+                "MetadataBase.metadata.drop_all(bind=metadata_manager.engine)\n"
+                "MetadataBase.metadata.create_all(bind=metadata_manager.engine)\n"
+                "su = MetadataService.create_first_admin('SuAdmin', 'SuAdminPass123!')\n"
+                "MetadataService.register_or_update_database(\n"
+                "    'Test', 'Test', 'postgresql',\n"
+                "    connection_uri='postgresql://u:p@db.example:5432/test',\n"
+                ")\n"
+                "MetadataService.register_or_update_database(\n"
+                "    'OtherDb', 'Other', 'postgresql',\n"
+                "    connection_uri='postgresql://u:p@db.example:5432/other',\n"
+                ")\n"
+                "db_manager.current_db_id = 'Test'\n"
+                "client = TestClient(app)\n"
+                "su_headers = {'Authorization': f'Bearer {create_access_token(su.id, su.username)}'}\n"
+                "create_admin = client.post('/api/users', json={'username': 'db_admin_b', 'password': 'UserBPass123!', 'role': 'ADMIN'}, headers=su_headers)\n"
+                "assert create_admin.status_code == 200, create_admin.text\n"
+                "user_b_id = create_admin.json()['user_id']\n"
+                "db = metadata_manager.get_session()\n"
+                "try:\n"
+                "    roles = db.query(HadilUserDatabaseRole).filter(HadilUserDatabaseRole.user_id == user_b_id).all()\n"
+                "    assert [(r.database_id, r.role) for r in roles] == [('Test', 'ADMIN')]\n"
+                "    assert db.query(HadilDatabase).filter(HadilDatabase.id == 'default_db').count() == 0\n"
+                "finally:\n"
+                "    db.close()\n"
+                "assert MetadataService.get_user_role_for_database(user_b_id, 'Test') == 'ADMIN'\n"
+                "assert MetadataService.get_user_role_for_database(user_b_id, 'OtherDb') is None\n"
+                "assert MetadataService.check_permission(user_b_id, 'Test', 'DELETE')\n"
+                "assert MetadataService.check_permission(user_b_id, 'Test', 'MANAGE_USERS')\n"
+                "assert not MetadataService.check_permission(user_b_id, 'OtherDb', 'DELETE')\n"
+                "assert MetadataService.get_user_role_for_database(su.id, 'Test') == 'MASTER_ADMIN'\n"
+                "create_editor = client.post('/api/users', json={'username': 'editor_c', 'password': 'EditorPass123!', 'role': 'EDITOR'}, headers=su_headers)\n"
+                "assert create_editor.status_code == 200, create_editor.text\n"
+                "editor_id = create_editor.json()['user_id']\n"
+                "create_viewer = client.post('/api/users', json={'username': 'viewer_d', 'password': 'ViewerPass123!', 'role': 'VIEWER'}, headers=su_headers)\n"
+                "assert create_viewer.status_code == 200, create_viewer.text\n"
+                "viewer_id = create_viewer.json()['user_id']\n"
+                "db_admin_headers = {'Authorization': f'Bearer {create_access_token(user_b_id, \"db_admin_b\")}'}\n"
+                "blocked_admin = client.post('/api/users', json={'username': 'should_fail_admin', 'password': 'Nope123!', 'role': 'ADMIN'}, headers=db_admin_headers)\n"
+                "assert blocked_admin.status_code == 403, blocked_admin.text\n"
+                "editor_headers = {'Authorization': f'Bearer {create_access_token(editor_id, \"editor_c\")}'}\n"
+                "blocked_editor = client.post('/api/users', json={'username': 'should_fail_editor', 'password': 'Nope123!', 'role': 'ADMIN'}, headers=editor_headers)\n"
+                "assert blocked_editor.status_code == 403, blocked_editor.text\n"
+                "viewer_headers = {'Authorization': f'Bearer {create_access_token(viewer_id, \"viewer_d\")}'}\n"
+                "blocked_viewer = client.post('/api/users', json={'username': 'should_fail_viewer', 'password': 'Nope123!', 'role': 'ADMIN'}, headers=viewer_headers)\n"
+                "assert blocked_viewer.status_code == 403, blocked_viewer.text\n"
+                "assign_editor_ok = client.post(f'/api/users/{editor_id}/roles', json={'user_id': editor_id, 'role': 'VIEWER'}, headers=su_headers)\n"
+                "assert assign_editor_ok.status_code == 200, assign_editor_ok.text\n"
+                "print('MASTER_ADMIN_ASSIGN_ADMIN_OK')\n"
+            )
+            env = os.environ.copy()
+            env["HADIL_DEPLOYMENT_MODE"] = "cloud"
+            env["HADIL_JWT_SECRET"] = "cloud-test-secret-not-default-value"
+            env["HADIL_METADATA_DB"] = meta_path
+            env["DATABASE_FOLDER"] = empty_folder
+            env.pop("HADIL_METADATA_DATABASE_URL", None)
+            result = subprocess.run(
+                [sys.executable, "-c", script],
+                cwd=REPO_ROOT,
+                capture_output=True,
+                text=True,
+                env=env,
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn("MASTER_ADMIN_ASSIGN_ADMIN_OK", result.stdout)
+        finally:
+            try:
+                os.remove(meta_path)
+            except OSError:
+                pass
+            shutil.rmtree(empty_folder, ignore_errors=True)
+
+
 if __name__ == "__main__":
     unittest.main()

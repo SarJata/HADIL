@@ -117,10 +117,13 @@ def test_7_client_role_spoofing_prevented():
         # Server must ignore these and strictly create ADMIN
         user = MetadataService.create_first_admin("spoofed_user", "ValidPass123!", db_session=db)
         db_user = db.query(HadilUser).filter(HadilUser.id == user.id).first()
-        assert len(db_user.roles) > 0
+        from database.metadata_db import HadilSystemRole
+        sys_role = db.query(HadilSystemRole).filter(HadilSystemRole.user_id == user.id).first()
+        assert sys_role is not None and sys_role.role == "MASTER_ADMIN"
+        assert all(r.database_id != "default_db" for r in db_user.roles)
         for r in db_user.roles:
             assert r.role == "ADMIN", f"Role was spoofed to {r.role} instead of server-enforced ADMIN"
-        print("PASS Test 7: Client role spoofing strictly rejected; server enforces ADMIN role")
+        print("PASS Test 7: Client role spoofing strictly rejected; server enforces MASTER_ADMIN without default_db")
         db.close()
     finally:
         cleanup_isolated_db(engine)

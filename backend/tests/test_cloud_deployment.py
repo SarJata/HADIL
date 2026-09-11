@@ -542,5 +542,79 @@ class TestFrontendDistResolution(unittest.TestCase):
         self.assertIn("SPA_MOUNT_OK", result.stdout)
 
 
+class TestInitialAdminWithoutDefaultDatabase(unittest.TestCase):
+    """Initial MASTER_ADMIN must provision when hadil_databases is empty (cloud / FK-safe)."""
+
+    def test_first_admin_then_customer_database_role(self):
+        backend_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        fd, meta_path = tempfile.mkstemp(suffix="_hadil_admin.db")
+        os.close(fd)
+        empty_folder = tempfile.mkdtemp(prefix="hadil_empty_dbs_")
+        try:
+            script = (
+                "import os, sys\n"
+                "os.environ['HADIL_DEPLOYMENT_MODE'] = 'cloud'\n"
+                "os.environ['HADIL_JWT_SECRET'] = 'cloud-test-secret-not-default-value'\n"
+                f"os.environ['HADIL_METADATA_DB'] = {meta_path!r}\n"
+                f"os.environ['DATABASE_FOLDER'] = {empty_folder!r}\n"
+                "os.environ.pop('HADIL_METADATA_DATABASE_URL', None)\n"
+                f"sys.path.insert(0, {backend_dir!r})\n"
+                "from database.metadata_db import HadilUser, HadilUserDatabaseRole, HadilDatabase, HadilSystemRole, MetadataBase, metadata_manager\n"
+                "from services.metadata_service import MetadataService\n"
+                "MetadataBase.metadata.drop_all(bind=metadata_manager.engine)\n"
+                "MetadataBase.metadata.create_all(bind=metadata_manager.engine)\n"
+                "user = MetadataService.create_first_admin('cloud_setup_admin', 'CloudAdminPass123!')\n"
+                "db = metadata_manager.get_session()\n"
+                "try:\n"
+                "    assert db.query(HadilDatabase).count() == 0\n"
+                "    roles = db.query(HadilUserDatabaseRole).filter(HadilUserDatabaseRole.user_id == user.id).all()\n"
+                "    assert roles == []\n"
+                "    assert db.query(HadilUserDatabaseRole).filter(HadilUserDatabaseRole.database_id == 'default_db').count() == 0\n"
+                "    sys_role = db.query(HadilSystemRole).filter(HadilSystemRole.user_id == user.id).one()\n"
+                "    assert sys_role.role == 'MASTER_ADMIN'\n"
+                "    assert MetadataService.get_user_role_for_database(user.id, 'default_db') == 'MASTER_ADMIN'\n"
+                "finally:\n"
+                "    db.close()\n"
+                "record = MetadataService.register_or_update_database(\n"
+                "    'customer_analytics_pg', 'Customer Analytics', 'postgresql',\n"
+                "    connection_uri='postgresql://u:p@db.example:5432/analytics',\n"
+                ")\n"
+                "assert record.id == 'customer_analytics_pg'\n"
+                "db = metadata_manager.get_session()\n"
+                "try:\n"
+                "    assert db.query(HadilDatabase).filter(HadilDatabase.id == 'default_db').count() == 0\n"
+                "    role = db.query(HadilUserDatabaseRole).filter(\n"
+                "        HadilUserDatabaseRole.user_id == user.id,\n"
+                "        HadilUserDatabaseRole.database_id == 'customer_analytics_pg',\n"
+                "    ).one()\n"
+                "    assert role.role == 'ADMIN'\n"
+                "finally:\n"
+                "    db.close()\n"
+                "assert MetadataService.check_permission(user.id, 'customer_analytics_pg', 'MANAGE_USERS')\n"
+                "print('INITIAL_ADMIN_NO_DEFAULT_DB_OK')\n"
+            )
+            env = os.environ.copy()
+            env["HADIL_DEPLOYMENT_MODE"] = "cloud"
+            env["HADIL_JWT_SECRET"] = "cloud-test-secret-not-default-value"
+            env["HADIL_METADATA_DB"] = meta_path
+            env["DATABASE_FOLDER"] = empty_folder
+            env.pop("HADIL_METADATA_DATABASE_URL", None)
+            result = subprocess.run(
+                [sys.executable, "-c", script],
+                cwd=REPO_ROOT,
+                capture_output=True,
+                text=True,
+                env=env,
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn("INITIAL_ADMIN_NO_DEFAULT_DB_OK", result.stdout)
+        finally:
+            try:
+                os.remove(meta_path)
+            except OSError:
+                pass
+            shutil.rmtree(empty_folder, ignore_errors=True)
+
+
 if __name__ == "__main__":
     unittest.main()

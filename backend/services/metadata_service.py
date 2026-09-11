@@ -21,6 +21,7 @@ from database.metadata_db import (
 
 from services.secret_service import encrypt_secret, decrypt_secret
 from utils.path_resolver import get_default_database_folder
+from config.deployment import get_deployment_config
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +55,8 @@ class MetadataService:
                     status=status
                 )
                 db.add(db_record)
+                db.flush()
+                MetadataService._grant_master_admins_role_on_database(db, db_id)
             else:
                 db_record.name = name
                 db_record.database_type = database_type
@@ -139,6 +142,8 @@ class MetadataService:
                 status="active"
             )
             db.add(record)
+            db.flush()
+            MetadataService._grant_master_admins_role_on_database(db, db_id)
             db.commit()
             db.refresh(record)
             return {
@@ -189,6 +194,50 @@ class MetadataService:
             ]
         finally:
             db.close()
+
+    @staticmethod
+    def _discover_registered_database_ids(db_session: Session) -> List[str]:
+        """Return existing hadil_databases ids. Desktop also registers local SQLite files.
+
+        Never invents a synthetic 'default_db' row. Cloud skips local filesystem scan.
+        """
+        all_dbs = db_session.query(HadilDatabase).all()
+        db_ids = [d.id for d in all_dbs]
+        if not get_deployment_config().sqlite_directory_scan:
+            return db_ids
+        db_folder = get_default_database_folder()
+        if os.path.exists(db_folder):
+            for f in os.listdir(db_folder):
+                if f.endswith(".db") and f not in db_ids:
+                    db_session.add(HadilDatabase(id=f, name=f, database_type="sqlite"))
+                    db_ids.append(f)
+        return db_ids
+
+    @staticmethod
+    def _grant_master_admins_role_on_database(db_session: Session, database_id: str, role: str = "ADMIN") -> None:
+        """Attach database-scoped ADMIN roles for MASTER_ADMIN users after a real DB is registered."""
+        masters = db_session.query(HadilSystemRole).filter(HadilSystemRole.role == "MASTER_ADMIN").all()
+        for sys_role in masters:
+            existing = db_session.query(HadilUserDatabaseRole).filter(
+                HadilUserDatabaseRole.user_id == sys_role.user_id,
+                HadilUserDatabaseRole.database_id == database_id,
+            ).first()
+            if existing:
+                continue
+            db_session.add(HadilUserDatabaseRole(
+                user_id=sys_role.user_id,
+                database_id=database_id,
+                role=role,
+            ))
+
+    @staticmethod
+    def _assign_admin_roles_for_databases(db_session: Session, user_id: int, db_ids: List[str]) -> None:
+        for db_id in db_ids:
+            db_session.add(HadilUserDatabaseRole(
+                user_id=user_id,
+                database_id=db_id,
+                role="ADMIN",
+            ))
 
     # --- Users & Password Management ---
     @staticmethod
@@ -253,19 +302,9 @@ class MetadataService:
             if existing_user:
                 raise ValueError("Initial setup has already been completed.")
 
-            # Discover registered/available databases
-
-            all_dbs = db_session.query(HadilDatabase).all()
-            db_ids = [d.id for d in all_dbs]
-            db_folder = get_default_database_folder()
-            if os.path.exists(db_folder):
-                for f in os.listdir(db_folder):
-                    if f.endswith(".db") and f not in db_ids:
-                        new_db = HadilDatabase(id=f, name=f, database_type="sqlite")
-                        db_session.add(new_db)
-                        db_ids.append(f)
-            if not db_ids:
-                db_ids = ["default_db"]
+            # Assign ADMIN only on databases that already exist in hadil_databases.
+            # Do not invent database_id="default_db" (FK fails on PostgreSQL / cloud).
+            db_ids = MetadataService._discover_registered_database_ids(db_session)
 
             hashed = hash_password(password_raw)
             user = HadilUser(username=username.strip(), password_hash=hashed)
@@ -276,13 +315,7 @@ class MetadataService:
             sys_role = HadilSystemRole(slot=1, user_id=user.id, role="MASTER_ADMIN")
             db_session.add(sys_role)
 
-            for db_id in db_ids:
-                role_rec = HadilUserDatabaseRole(
-                    user_id=user.id,
-                    database_id=db_id,
-                    role="ADMIN"
-                )
-                db_session.add(role_rec)
+            MetadataService._assign_admin_roles_for_databases(db_session, user.id, db_ids)
 
             db_session.commit()
             db_session.refresh(user)
@@ -331,22 +364,8 @@ class MetadataService:
             db.query(HadilUser).delete()
             db.commit()
 
-            # Discover databases in HadilDatabase table
-            all_dbs = db.query(HadilDatabase).all()
-            db_ids = [d.id for d in all_dbs]
-
-            # Also discover local database files in configured db folder
-            db_folder = get_default_database_folder()
-            if os.path.exists(db_folder):
-                for f in os.listdir(db_folder):
-                    if f.endswith(".db") and f not in db_ids:
-                        new_db = HadilDatabase(id=f, name=f, database_type="sqlite")
-                        db.add(new_db)
-                        db_ids.append(f)
-                db.commit()
-
-            if not db_ids:
-                db_ids = ["default_db"]
+            db_ids = MetadataService._discover_registered_database_ids(db)
+            db.commit()
 
             created_users = []
 
@@ -521,23 +540,8 @@ class MetadataService:
             db_session.add(sys_role)
 
             # 4. Assign ADMIN role across all registered databases for seamless scoping
-            all_dbs = db_session.query(HadilDatabase).all()
-            db_ids = [d.id for d in all_dbs]
-            db_folder = get_default_database_folder()
-            if os.path.exists(db_folder):
-                for f in os.listdir(db_folder):
-                    if f.endswith(".db") and f not in db_ids:
-                        new_db = HadilDatabase(id=f, name=f, database_type="sqlite")
-                        db_session.add(new_db)
-                        db_ids.append(f)
-
-            for db_id in db_ids:
-                role_rec = HadilUserDatabaseRole(
-                    user_id=user.id,
-                    database_id=db_id,
-                    role="ADMIN"
-                )
-                db_session.add(role_rec)
+            db_ids = MetadataService._discover_registered_database_ids(db_session)
+            MetadataService._assign_admin_roles_for_databases(db_session, user.id, db_ids)
 
             db_session.commit()
             db_session.refresh(user)

@@ -343,6 +343,10 @@ class TestCloudStartupIsolation(unittest.TestCase):
             "cfg = get_deployment_config()\n"
             "assert cfg.is_cloud\n"
             "assert cfg.bind_host == '0.0.0.0'\n"
+            "assert 'sentence_transformers' not in sys.modules\n"
+            "assert 'torch' not in sys.modules\n"
+            "from services.policy_rag_service import policy_rag_service\n"
+            "assert policy_rag_service.model is None\n"
             "print('CLOUD_STARTUP_OK')\n"
         )
         env = os.environ.copy()
@@ -359,6 +363,73 @@ class TestCloudStartupIsolation(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("CLOUD_STARTUP_OK", result.stdout)
+
+    def test_import_main_does_not_eagerly_import_sentence_transformers(self):
+        backend_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        script = (
+            "import os, sys, time\n"
+            "os.environ['HADIL_DEPLOYMENT_MODE'] = 'cloud'\n"
+            "os.environ['HADIL_JWT_SECRET'] = 'cloud-test-secret-not-default-value'\n"
+            "os.environ['HADIL_METADATA_DB'] = './test_cloud_startup_metadata.db'\n"
+            "os.environ.pop('PYTHONPATH', None)\n"
+            f"sys.path.insert(0, {backend_dir!r})\n"
+            "t0 = time.perf_counter()\n"
+            "from uvicorn.importer import import_from_string\n"
+            "app = import_from_string('main:app')\n"
+            "elapsed = time.perf_counter() - t0\n"
+            "assert app.__class__.__name__ == 'FastAPI'\n"
+            "assert 'sentence_transformers' not in sys.modules\n"
+            "assert 'torch' not in sys.modules\n"
+            "from services.policy_rag_service import policy_rag_service\n"
+            "assert policy_rag_service.model is None\n"
+            "print('LAZY_ST_IMPORT_OK', round(elapsed, 3))\n"
+        )
+        env = os.environ.copy()
+        env.pop("PYTHONPATH", None)
+        env["HADIL_DEPLOYMENT_MODE"] = "cloud"
+        env["HADIL_JWT_SECRET"] = "cloud-test-secret-not-default-value"
+        env["HADIL_METADATA_DB"] = "./test_cloud_startup_metadata.db"
+        result = subprocess.run(
+            [sys.executable, "-c", script],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("LAZY_ST_IMPORT_OK", result.stdout)
+
+    def test_get_model_lazily_imports_sentence_transformer(self):
+        backend_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        script = (
+            "import os, sys, types\n"
+            "from unittest.mock import MagicMock\n"
+            "os.environ['HADIL_DEPLOYMENT_MODE'] = 'cloud'\n"
+            f"sys.path.insert(0, {backend_dir!r})\n"
+            "fake_model = object()\n"
+            "fake_cls = MagicMock(return_value=fake_model)\n"
+            "fake_mod = types.ModuleType('sentence_transformers')\n"
+            "fake_mod.SentenceTransformer = fake_cls\n"
+            "sys.modules['sentence_transformers'] = fake_mod\n"
+            "from services.policy_rag_service import PolicyRAGService\n"
+            "svc = PolicyRAGService()\n"
+            "assert svc.model is None\n"
+            "got = svc._get_model()\n"
+            "assert got is fake_model\n"
+            "assert svc.model is fake_model\n"
+            "assert fake_cls.call_count == 1\n"
+            "assert svc._get_model() is fake_model\n"
+            "assert fake_cls.call_count == 1\n"
+            "print('GET_MODEL_LAZY_OK')\n"
+        )
+        result = subprocess.run(
+            [sys.executable, "-c", script],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("GET_MODEL_LAZY_OK", result.stdout)
 
 
 if __name__ == "__main__":

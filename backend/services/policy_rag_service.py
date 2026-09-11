@@ -8,16 +8,13 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
-# Lazy imports for ML/Vector libraries to avoid startup crashes if missing
+# faiss is light enough to import here. sentence-transformers/Torch must NOT be
+# imported at module load: Uvicorn binds only after import main, and that import
+# previously blocked Render's port scan for minutes.
 try:
     import faiss
 except ImportError:
     faiss = None
-
-try:
-    from sentence_transformers import SentenceTransformer
-except ImportError:
-    SentenceTransformer = None
 
 try:
     import pypdf
@@ -110,10 +107,12 @@ class PolicyRAGService:
 
     def _get_model(self):
         if self.model is None:
-            if SentenceTransformer is None:
+            try:
+                from sentence_transformers import SentenceTransformer
+            except ImportError as exc:
                 raise RuntimeError(
                     "sentence-transformers is not installed; Policy RAG cannot load MiniLM."
-                )
+                ) from exc
             resolved = resolve_embedding_model_source()
             location = resolved["location"]
             logger.info(

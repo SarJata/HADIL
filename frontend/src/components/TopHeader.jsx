@@ -31,6 +31,10 @@ export default function TopHeader({
 
   const getRoleBadgeStyle = (r) => {
     switch (r) {
+      case 'MASTER_ADMIN':
+        return 'bg-amber-950/80 border-amber-800 text-amber-300';
+      case 'SUADMIN':
+        return 'bg-teal-950/80 border-teal-800 text-teal-300';
       case 'ADMIN':
         return 'bg-purple-950/80 border-purple-800 text-purple-300';
       case 'EDITOR':
@@ -193,7 +197,7 @@ export default function TopHeader({
           <div className="hidden lg:block text-left">
             <div className="flex items-center gap-1.5">
               <p className="text-xs font-semibold text-slate-100 leading-tight">
-                {user?.username || 'Authenticated User'}
+                {user?.displayUsername || user?.username || 'Authenticated User'}
               </p>
               <span className={`text-[9px] font-mono font-bold px-1.5 py-0.2 rounded border ${getRoleBadgeStyle(role)}`}>
                 {role || 'NO ROLE'}

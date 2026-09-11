@@ -17,10 +17,19 @@ export default function SidebarNav({
   onSelectTable,
   isConnected = false,
   role = null,
-  permissions = []
+  permissions = [],
+  capabilities = {},
+  authorityType = null
 }) {
-  const canManageUsers = permissions.includes('MANAGE_USERS') || role === 'ADMIN' || role === 'MASTER_ADMIN' || role === 'SUADMIN';
-  const canConfigureProviders = role === 'ADMIN' || role === 'MASTER_ADMIN' || role === 'SUADMIN';
+  const isCloud = capabilities.deployment_mode === 'cloud' || capabilities.organization_signup;
+  const isPlatformMaster = role === 'MASTER_ADMIN' || authorityType === 'PLATFORM';
+  const isOrgSuAdmin = role === 'SUADMIN' || authorityType === 'ORGANIZATION';
+  const canManageUsers = isCloud
+    ? (isOrgSuAdmin || role === 'ADMIN')
+    : (permissions.includes('MANAGE_USERS') || role === 'ADMIN' || role === 'MASTER_ADMIN' || role === 'SUADMIN');
+  const canConfigureProviders = isCloud
+    ? (isOrgSuAdmin || isPlatformMaster)
+    : (role === 'ADMIN' || role === 'MASTER_ADMIN' || role === 'SUADMIN');
   const dynamicTables = tables && tables.length > 0 ? tables : (dbInsights.tables || []);
   
   // Customisable Sidebar Width State
@@ -321,7 +330,7 @@ export default function SidebarNav({
               </button>
             )}
 
-            {role === 'MASTER_ADMIN' && (
+            {isPlatformMaster && (
               <button
                 onClick={() => onViewChange('platform-orgs')}
                 title="Pending Organizations"

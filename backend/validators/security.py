@@ -72,10 +72,16 @@ def enforce_permission(action: str):
     """
     def check_user_permission(current_user: Dict[str, Any] = Depends(get_current_user)):
         user_id = int(current_user["sub"])
+        from config.deployment import get_deployment_config
+        cfg = get_deployment_config()
+
+        # Cloud organization user management is not a database-scoped permission.
+        if cfg.is_cloud and action.upper() == "MANAGE_USERS":
+            return enforce_manage_users(current_user)
+
         active_db_id = db_manager.current_db_id or "sales.db"
 
-        from config.deployment import get_deployment_config
-        if get_deployment_config().is_cloud and action.upper() != "MANAGE_USERS" and db_manager.current_db_id:
+        if cfg.is_cloud and db_manager.current_db_id:
             try:
                 metadata_service.assert_customer_database_access(user_id, db_manager.current_db_id)
             except PermissionError as exc:
@@ -95,6 +101,45 @@ def enforce_permission(action: str):
         return current_user
 
     return check_user_permission
+
+
+def enforce_manage_users(current_user: Dict[str, Any] = Depends(get_current_user)) -> Dict[str, Any]:
+    """
+    Organization-level user administration on cloud (SUADMIN, no active DB required).
+    Database-scoped ADMIN still uses MANAGE_USERS on the selected customer database.
+    Platform MASTER_ADMIN is not a customer user-manager.
+    """
+    user_id = int(current_user["sub"])
+    from config.deployment import get_deployment_config
+    if get_deployment_config().is_cloud:
+        user = metadata_service.get_user_by_id(user_id)
+        if user and (user.organization_role or "").upper() == "SUADMIN":
+            return current_user
+        if metadata_service.is_platform_master_admin(user_id):
+            raise HTTPException(
+                status_code=403,
+                detail="Access Denied: Platform Master Admin manages organizations, not customer database users.",
+            )
+        active_db_id = db_manager.current_db_id
+        if not active_db_id:
+            raise HTTPException(
+                status_code=403,
+                detail="Access Denied: Organization user management requires SUADMIN, or MANAGE_USERS on a selected organization database.",
+            )
+        if not metadata_service.check_permission(user_id, active_db_id, "MANAGE_USERS"):
+            raise HTTPException(
+                status_code=403,
+                detail=f"Access Denied: User '{current_user.get('username')}' lacks 'MANAGE_USERS' permission on database '{active_db_id}'.",
+            )
+        return current_user
+
+    active_db_id = db_manager.current_db_id or "sales.db"
+    if not metadata_service.check_permission(user_id, active_db_id, "MANAGE_USERS"):
+        raise HTTPException(
+            status_code=403,
+            detail=f"Access Denied: User '{current_user.get('username')}' lacks 'MANAGE_USERS' permission on active database '{active_db_id}'.",
+        )
+    return current_user
 
 
 def enforce_suadmin(current_user: Dict[str, Any] = Depends(get_current_user)) -> Dict[str, Any]:

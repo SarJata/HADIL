@@ -79,6 +79,7 @@ from validators.security import (
     create_access_token,
     get_current_user,
     enforce_permission,
+    enforce_manage_users,
     get_current_user_optional,
     enforce_suadmin,
     enforce_platform_master,
@@ -93,6 +94,7 @@ from database.metadata_db import STATUS_PENDING, STATUS_ACTIVE, STATUS_SUSPENDED
 class LoginRequest(BaseModel):
     username: str = Field(..., min_length=1)
     password: str = Field(..., min_length=1)
+    organization: Optional[str] = None
 
 class SetupAdminRequest(BaseModel):
     username: str
@@ -663,7 +665,11 @@ async def validate_sql_endpoint(request: ValidateRequest, is_direct_sql: bool = 
 @router.post("/auth/login")
 async def login(request: LoginRequest):
     try:
-        user = metadata_service.authenticate_user(request.username, request.password)
+        user = metadata_service.authenticate_user(
+            request.username,
+            request.password,
+            organization=request.organization,
+        )
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc))
     except ValueError:
@@ -690,47 +696,15 @@ async def signup(request: SignupRequest):
 @router.get("/auth/me")
 async def get_me(current_user: Dict[str, Any] = Depends(get_current_user)):
     user_id = int(current_user["sub"])
-    username = current_user["username"]
-    active_db_id = db_manager.current_db_id
-    user = metadata_service.get_user_by_id(user_id)
-    
-    target_db = active_db_id or "sales.db"
-    role = metadata_service.get_user_role_for_database(user_id, target_db)
-    if metadata_service.is_platform_master_admin(user_id):
-        role = "MASTER_ADMIN"
-    elif user and (user.organization_role or "").upper() == "SUADMIN":
-        role = "SUADMIN"
-    permissions = []
-    if role == "MASTER_ADMIN":
-        if get_deployment_config().is_cloud:
-            permissions = ["MANAGE_PLATFORM"]
-        else:
-            permissions = ["READ", "ADD", "UPDATE", "DELETE", "MANAGE_USERS"]
-    elif role in ["ADMIN", "SUADMIN"]:
-        permissions = ["READ", "ADD", "UPDATE", "DELETE", "MANAGE_USERS"]
-    elif role == "EDITOR":
-        permissions = ["READ", "ADD", "UPDATE"]
-    elif role == "VIEWER":
-        permissions = ["READ"]
-    org = None
-    if user and user.organization_id:
-        org_rec = metadata_service.get_organization(user.organization_id)
-        if org_rec:
-            org = {"id": org_rec.id, "name": org_rec.name, "slug": org_rec.slug, "status": org_rec.status}
-    return {
-        "user_id": user_id,
-        "username": username,
-        "active_database_id": active_db_id,
-        "role": role,
-        "permissions": permissions,
-        "organization": org,
-        "organization_id": user.organization_id if user else None,
-        "account_status": user.account_status if user else None,
-    }
+    return metadata_service.build_auth_identity(
+        user_id=user_id,
+        jwt_username=current_user.get("username"),
+        active_db_id=db_manager.current_db_id,
+    )
 
 @router.get("/users")
 async def list_users_endpoint(
-    current_user: Dict[str, Any] = Depends(enforce_permission("MANAGE_USERS"))
+    current_user: Dict[str, Any] = Depends(enforce_manage_users)
 ):
     users = metadata_service.list_users()
     cfg = get_deployment_config()
@@ -760,7 +734,7 @@ async def reset_and_seed_users_endpoint(
 @router.post("/users")
 async def create_user_endpoint(
     request: CreateUserRequest,
-    current_user: Dict[str, Any] = Depends(enforce_permission("MANAGE_USERS"))
+    current_user: Dict[str, Any] = Depends(enforce_manage_users)
 ):
     try:
         actor_id = int(current_user["sub"])
@@ -770,12 +744,14 @@ async def create_user_endpoint(
             raise HTTPException(status_code=403, detail="Cannot create MASTER_ADMIN or SUADMIN through user management.")
 
         if cfg.is_cloud:
+            db_id = db_manager.current_db_id
+            db_role = target_role if db_id else None
             new_user = metadata_service.create_organization_user(
                 actor_user_id=actor_id,
                 local_username=request.username,
                 password_raw=request.password,
-                database_id=db_manager.current_db_id,
-                db_role=target_role,
+                database_id=db_id,
+                db_role=db_role,
             )
             return {"success": True, "user_id": new_user.id, "username": new_user.username}
 
@@ -805,7 +781,7 @@ async def create_user_endpoint(
 async def assign_role_endpoint(
     user_id: int,
     request: AssignRoleRequest,
-    current_user: Dict[str, Any] = Depends(enforce_permission("MANAGE_USERS"))
+    current_user: Dict[str, Any] = Depends(enforce_manage_users)
 ):
     if not db_manager.current_db_id:
         raise HTTPException(status_code=400, detail="No active database selected.")

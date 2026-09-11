@@ -161,13 +161,36 @@ export default function App() {
     setAuthError(`Admin account '${newAdminUsername}' created successfully! Please sign in.`);
   };
 
+  const applyAuthMe = (me) => {
+    setUser({
+      id: me.user_id,
+      username: me.username,
+      displayUsername: me.display_username || me.username,
+      authorityType: me.authority_type,
+      organizationRole: me.organization_role,
+      platformRole: me.platform_role,
+      organization: me.organization || null,
+      role: me.role,
+    });
+    setRole(me.role);
+    setPermissions(me.permissions || []);
+  };
+
+  const isCloudDeployment = capabilities.deployment_mode === 'cloud' || capabilities.organization_signup;
+  const isPlatformMaster = role === 'MASTER_ADMIN';
+  const isOrgSuAdmin = role === 'SUADMIN';
+  const canManageOrgUsers = isOrgSuAdmin || role === 'ADMIN' || (!isCloudDeployment && (permissions.includes('MANAGE_USERS') || isPlatformMaster));
+  const canSeePlatformOrgs = isPlatformMaster;
+
   // Reset view if view is user-management but user is not authorized
   useEffect(() => {
-    const canManage = permissions.includes('MANAGE_USERS') || role === 'ADMIN' || role === 'MASTER_ADMIN' || role === 'SUADMIN';
-    if (currentView === 'user-management' && !canManage) {
+    if (currentView === 'user-management' && !canManageOrgUsers) {
       setCurrentView('overview');
     }
-  }, [role, permissions, currentView]);
+    if (currentView === 'platform-orgs' && !canSeePlatformOrgs) {
+      setCurrentView('overview');
+    }
+  }, [canManageOrgUsers, canSeePlatformOrgs, currentView]);
 
   // Save pinned widgets to localStorage on change
   useEffect(() => {
@@ -198,9 +221,7 @@ export default function App() {
       setAuthLoading(true);
       const meRes = await api.get('/auth/me');
       setIsAuthenticated(true);
-      setUser({ id: meRes.data.user_id, username: meRes.data.username });
-      setRole(meRes.data.role);
-      setPermissions(meRes.data.permissions || []);
+      applyAuthMe(meRes.data);
       setAuthError(null);
       await fetchDatabases();
       await fetchHistory();
@@ -217,20 +238,21 @@ export default function App() {
   };
 
   // Login handler
-  const handleLogin = async (username, password) => {
+  const handleLogin = async (username, password, organization) => {
     setAuthLoading(true);
     setAuthError(null);
     try {
-      const res = await api.post('/auth/login', { username, password });
+      const payload = { username, password };
+      if (organization) {
+        payload.organization = organization;
+      }
+      const res = await api.post('/auth/login', payload);
       const newToken = res.data.access_token;
       localStorage.setItem('hadil_jwt_token', newToken);
 
-      // Fetch user profile and active database role
       const meRes = await api.get('/auth/me');
       setIsAuthenticated(true);
-      setUser({ id: meRes.data.user_id, username: meRes.data.username });
-      setRole(meRes.data.role);
-      setPermissions(meRes.data.permissions || []);
+      applyAuthMe(meRes.data);
 
       await fetchDatabases();
       await fetchHistory();
@@ -340,8 +362,7 @@ export default function App() {
 
         // Retrieve effective role for newly selected database
         const meRes = await api.get('/auth/me');
-        setRole(meRes.data.role);
-        setPermissions(meRes.data.permissions || []);
+        applyAuthMe(meRes.data);
 
         await Promise.all([
           fetchDatabases(),
@@ -388,8 +409,7 @@ export default function App() {
 
         // Retrieve effective role for new custom database
         const meRes = await api.get('/auth/me');
-        setRole(meRes.data.role);
-        setPermissions(meRes.data.permissions || []);
+        applyAuthMe(meRes.data);
 
         await Promise.all([
           fetchDatabases(),
@@ -870,17 +890,19 @@ export default function App() {
           isConnected={isConnected}
           role={role}
           permissions={permissions}
+          capabilities={capabilities}
+          authorityType={user?.authorityType}
         />
 
         {/* Main Content Workspace */}
         <main className="flex-1 bg-[#0B0F19] overflow-y-auto p-8 space-y-8 custom-scrollbar">
 
           {/* VIEW MODE 1: USER MANAGEMENT & SUADMIN */}
-          {currentView === 'user-management' && (permissions.includes('MANAGE_USERS') || role === 'ADMIN' || role === 'MASTER_ADMIN' || role === 'SUADMIN') ? (
+          {currentView === 'user-management' && canManageOrgUsers ? (
             <UserManagementView databases={databases} activeDbId={selectedDbId} currentUser={user} currentRole={role} />
-          ) : currentView === 'platform-orgs' && role === 'MASTER_ADMIN' ? (
+          ) : currentView === 'platform-orgs' && canSeePlatformOrgs ? (
             <PlatformOrganizationsView />
-          ) : currentView === 'suadmin' && (permissions.includes('MANAGE_USERS') || role === 'ADMIN' || role === 'MASTER_ADMIN' || role === 'SUADMIN') ? (
+          ) : currentView === 'suadmin' && canManageOrgUsers ? (
             <SuAdminView databases={databases} activeDbId={selectedDbId} capabilities={capabilities} />
           ) : currentView === 'policy-documents' ? (
             <PolicyManagementView activeDatabase={databases.find(d => d.id === selectedDbId)} userRole={role} />

@@ -62,19 +62,29 @@ assert approve.json()["suadmin_role"] == "SUADMIN"
 login = client.post("/api/auth/login", json={"username": "admin1@org1", "password": "OrgPass123!"})
 assert login.status_code == 200, login.text
 su1_id = login.json()["user_id"]
-su1_headers = {"Authorization": f"Bearer {create_access_token(su1_id, 'admin1@org1')}"}
+su1_headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
 me = client.get("/api/auth/me", headers=su1_headers)
 assert me.json()["role"] == "SUADMIN"
+assert me.json()["authority_type"] == "ORGANIZATION"
+assert me.json()["organization_role"] == "SUADMIN"
+assert me.json()["platform_role"] is None
+assert me.json()["database_role"] is None
 assert me.json()["organization"]["id"] == org1
 
-# Zero databases is valid
+# Zero databases is valid; SUADMIN can still list org users
 dbs = metadata_manager.get_session()
 try:
     assert dbs.query(HadilDatabase).filter(HadilDatabase.organization_id == org1).count() == 0
     assert dbs.query(HadilDatabase).filter(HadilDatabase.id == "default_db").count() == 0
     assert dbs.query(HadilUserDatabaseRole).filter(HadilUserDatabaseRole.user_id == master.id).count() == 0
+    assert dbs.query(HadilUserDatabaseRole).filter(HadilUserDatabaseRole.user_id == su1_id).count() == 0
 finally:
     dbs.close()
+listed = client.get("/api/users", headers=su1_headers)
+assert listed.status_code == 200, listed.text
+assert any(u["id"] == su1_id for u in listed.json())
+master_users = client.get("/api/users", headers=master_headers)
+assert master_users.status_code == 403, master_users.text
 
 MetadataService.register_or_update_database(
     "DB1", "DB1", "postgresql", connection_uri="postgresql://u:p@h/db1", organization_id=org1

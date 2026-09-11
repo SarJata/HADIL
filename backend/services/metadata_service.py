@@ -2,7 +2,8 @@ import os
 import re
 import logging
 import hashlib
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Tuple
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 from database.metadata_db import (
     metadata_manager,
@@ -323,6 +324,8 @@ class MetadataService:
                 raise ValueError("Initial setup has already been completed.")
 
             clean_user = username.strip()
+            if "@" in clean_user:
+                raise ValueError("Platform administrator username cannot contain '@'.")
             existing_user = db_session.query(HadilUser).filter(HadilUser.username == clean_user).first()
             if existing_user:
                 raise ValueError("Initial setup has already been completed.")
@@ -570,6 +573,8 @@ class MetadataService:
                 raise ValueError("A Master Administrator already exists. Master Administrator creation is unavailable.")
 
             clean_username = username.strip()
+            if "@" in clean_username:
+                raise ValueError("Platform administrator username cannot contain '@'.")
             if not clean_username:
                 raise ValueError("Username cannot be empty.")
             if not password_raw or len(password_raw) == 0:
@@ -1098,16 +1103,114 @@ class MetadataService:
         return f"{local_username}@{slug}"
 
     @staticmethod
-    def resolve_login_identifier(identifier: str) -> Optional[HadilUser]:
+    def split_login_identifier(identifier: str) -> Tuple[str, Optional[str]]:
         raw = (identifier or "").strip()
-        if not raw:
-            return None
-        return MetadataService.get_user_by_username(raw)
+        if "@" not in raw:
+            return raw, None
+        local, suffix = raw.rsplit("@", 1)
+        return local.strip(), suffix.strip()
 
     @staticmethod
-    def authenticate_user(identifier: str, password_raw: str) -> HadilUser:
+    def _local_username_part(stored_username: str) -> str:
+        value = stored_username or ""
+        if "@" not in value:
+            return value
+        return value.rsplit("@", 1)[0]
+
+    @staticmethod
+    def _resolve_platform_login(username: str) -> Optional[HadilUser]:
+        raw = (username or "").strip()
+        if not raw or "@" in raw:
+            return None
+        db: Session = metadata_manager.get_session()
+        try:
+            user = db.query(HadilUser).filter(HadilUser.username == raw).first()
+            if user is None:
+                matches = db.query(HadilUser).filter(
+                    HadilUser.organization_id.is_(None),
+                    func.lower(HadilUser.username) == raw.lower(),
+                ).all()
+                if len(matches) != 1:
+                    return None
+                user = matches[0]
+            if user.organization_id:
+                return None
+            return user
+        finally:
+            db.close()
+
+    @staticmethod
+    def _resolve_org_login(local_username: str, slug: str) -> Optional[HadilUser]:
+        local = (local_username or "").strip()
+        if not local or "@" in local:
+            return None
+        db: Session = metadata_manager.get_session()
+        try:
+            org = db.query(HadilOrganization).filter(HadilOrganization.slug == slug).first()
+            if not org:
+                return None
+            login_name = MetadataService.org_login_username(local, slug)
+            user = db.query(HadilUser).filter(
+                HadilUser.username == login_name,
+                HadilUser.organization_id == org.id,
+            ).first()
+            if user is None:
+                candidates = db.query(HadilUser).filter(HadilUser.organization_id == org.id).all()
+                matches = [
+                    candidate
+                    for candidate in candidates
+                    if MetadataService._local_username_part(candidate.username).lower() == local.lower()
+                ]
+                if len(matches) != 1:
+                    return None
+                user = matches[0]
+            if MetadataService.is_platform_master_admin(user.id, db):
+                return None
+            if not user.organization_id or user.organization_id != org.id:
+                return None
+            return user
+        finally:
+            db.close()
+
+    @staticmethod
+    def resolve_login_identifier(identifier: str, organization: Optional[str] = None) -> Optional[HadilUser]:
+        """
+        Resolve a login to a tenant user by organization_id.
+
+        Platform MASTER_ADMIN: username-only (never username@organization).
+        Organization users: local username + organization slug/name, stored as local@slug.
+        """
+        raw = (identifier or "").strip()
+        org_input = (organization or "").strip() or None
+        if not raw:
+            return None
+
+        if "@" not in raw and not org_input:
+            return MetadataService._resolve_platform_login(raw)
+
+        try:
+            if "@" in raw:
+                local, suffix = MetadataService.split_login_identifier(raw)
+                if not local or not suffix:
+                    return None
+                suffix_slug = MetadataService.slugify_organization(suffix)
+                if org_input:
+                    org_slug = MetadataService.slugify_organization(org_input)
+                    if org_slug != suffix_slug:
+                        return None
+                slug = suffix_slug
+            else:
+                local = raw
+                slug = MetadataService.slugify_organization(org_input)
+        except ValueError:
+            return None
+
+        return MetadataService._resolve_org_login(local, slug)
+
+    @staticmethod
+    def authenticate_user(identifier: str, password_raw: str, organization: Optional[str] = None) -> HadilUser:
         from database.metadata_db import verify_password
-        user = MetadataService.resolve_login_identifier(identifier)
+        user = MetadataService.resolve_login_identifier(identifier, organization=organization)
         if not user or not verify_password(password_raw, user.password_hash):
             raise ValueError("Invalid username or password.")
         status = (user.account_status or STATUS_ACTIVE).upper()
@@ -1129,6 +1232,73 @@ class MetadataService:
             if org_status == STATUS_REJECTED:
                 raise PermissionError("This organization registration was rejected.")
         return user
+
+    @staticmethod
+    def build_auth_identity(user_id: int, jwt_username: Optional[str] = None, active_db_id: Optional[str] = None) -> Dict[str, Any]:
+        """Canonical identity for /api/auth/me. Cloud does not invent a fake default database."""
+        user = MetadataService.get_user_by_id(user_id)
+        platform_master = MetadataService.is_platform_master_admin(user_id)
+        org_role = (user.organization_role or "").upper() if user and user.organization_role else None
+        lookup_db_id = active_db_id
+        if not lookup_db_id and not get_deployment_config().is_cloud:
+            lookup_db_id = "sales.db"
+        database_role = None
+        if lookup_db_id:
+            raw_db_role = MetadataService.get_user_role_for_database(user_id, lookup_db_id)
+            if raw_db_role in DB_ROLES:
+                database_role = raw_db_role
+
+        if platform_master:
+            authority_type = "PLATFORM"
+            role = "MASTER_ADMIN"
+            if get_deployment_config().is_cloud:
+                permissions = ["MANAGE_PLATFORM"]
+            else:
+                permissions = ["READ", "ADD", "UPDATE", "DELETE", "MANAGE_USERS"]
+        elif org_role == ORG_ROLE_SUADMIN:
+            authority_type = "ORGANIZATION"
+            role = ORG_ROLE_SUADMIN
+            permissions = ["READ", "ADD", "UPDATE", "DELETE", "MANAGE_USERS"]
+        elif database_role == "ADMIN":
+            authority_type = "DATABASE"
+            role = "ADMIN"
+            permissions = ["READ", "ADD", "UPDATE", "DELETE", "MANAGE_USERS"]
+        elif database_role == "EDITOR":
+            authority_type = "DATABASE"
+            role = "EDITOR"
+            permissions = ["READ", "ADD", "UPDATE"]
+        elif database_role == "VIEWER":
+            authority_type = "DATABASE"
+            role = "VIEWER"
+            permissions = ["READ"]
+        else:
+            authority_type = "DATABASE"
+            role = database_role
+            permissions = []
+
+        org = None
+        if user and user.organization_id:
+            org_rec = MetadataService.get_organization(user.organization_id)
+            if org_rec:
+                org = {"id": org_rec.id, "name": org_rec.name, "slug": org_rec.slug, "status": org_rec.status}
+
+        stored_username = user.username if user else jwt_username
+        display_username = MetadataService._local_username_part(stored_username or "")
+        return {
+            "user_id": user_id,
+            "username": stored_username,
+            "display_username": display_username or stored_username,
+            "active_database_id": active_db_id,
+            "role": role,
+            "authority_type": authority_type,
+            "platform_role": "MASTER_ADMIN" if platform_master else None,
+            "organization_role": org_role,
+            "database_role": database_role,
+            "permissions": permissions,
+            "organization": org,
+            "organization_id": user.organization_id if user else None,
+            "account_status": user.account_status if user else None,
+        }
 
     @staticmethod
     def assert_account_usable(user_id: int) -> HadilUser:
@@ -1343,6 +1513,8 @@ class MetadataService:
         target_role = (db_role or "").upper() or None
         if target_role and target_role not in DB_ROLES:
             raise ValueError("Database role must be ADMIN, EDITOR, or VIEWER.")
+        if database_id and not MetadataService.database_belongs_to_org(database_id, actor.organization_id):
+            raise PermissionError("Database does not belong to this organization.")
 
         new_user = MetadataService.create_user(login_name, password_raw)
         db: Session = metadata_manager.get_session()
@@ -1360,8 +1532,6 @@ class MetadataService:
         if target_role:
             if not database_id:
                 raise ValueError("A database must be selected to assign a database role.")
-            if not MetadataService.database_belongs_to_org(database_id, actor.organization_id):
-                raise PermissionError("Database does not belong to this organization.")
             MetadataService.assign_user_role(created.id, database_id, target_role)
         return created
 

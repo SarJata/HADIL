@@ -46,7 +46,7 @@ export default function LoginScreen({ onLogin, onSignup, loading, authError, cap
       return;
     }
     if (!username.trim() || !password.trim()) return;
-    onLogin(username, password);
+    onLogin(username.trim(), password, isCloud ? organization.trim() : undefined);
   };
 
   const handleQuickLogin = (user, pass) => {
@@ -75,7 +75,7 @@ export default function LoginScreen({ onLogin, onSignup, loading, authError, cap
           </div>
           <p className="text-xs text-slate-400 font-medium">
             {isCloud
-              ? 'Cloud customers sign in as username@organization. Platform admins use their platform username.'
+              ? 'Customers sign in with username plus organization (or username@organization). Platform admins use a username only.'
               : 'Sign in to access your database-scoped analytics & AI grounding.'}
           </p>
         </div>
@@ -167,7 +167,7 @@ export default function LoginScreen({ onLogin, onSignup, loading, authError, cap
           <form onSubmit={handleSubmit} className="space-y-5">
             <div className="space-y-2">
               <label className="text-xs font-extrabold uppercase tracking-wider text-slate-300 block">
-                {isCloud && mode === 'login' ? 'Username@Organization' : 'Username'}
+                Username
               </label>
               <div className="relative flex items-center">
                 <div className="absolute left-3.5 text-slate-400">
@@ -177,24 +177,33 @@ export default function LoginScreen({ onLogin, onSignup, loading, authError, cap
                   type="text"
                   value={username}
                   onChange={(e) => setUsername(e.target.value)}
-                  placeholder={isCloud && mode === 'login' ? 'admin1@org1' : 'Enter your username'}
+                  placeholder={isCloud && mode === 'login' ? 'suadmin or suadmin@hadil' : 'Enter your username'}
                   required
+                  autoComplete="username"
                   className="w-full bg-[#0F1626] border border-[#1F2A44] rounded-xl pl-10 pr-4 py-3 text-xs text-slate-100 font-medium placeholder-slate-500 focus:outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20 transition-all"
                 />
               </div>
             </div>
 
-            {isCloud && mode === 'signup' && (
+            {isCloud && (
               <div className="space-y-2">
-                <label className="text-xs font-extrabold uppercase tracking-wider text-slate-300 block">Organization</label>
+                <label className="text-xs font-extrabold uppercase tracking-wider text-slate-300 block">
+                  Organization {mode === 'login' ? '(customers)' : ''}
+                </label>
                 <input
                   type="text"
                   value={organization}
                   onChange={(e) => setOrganization(e.target.value)}
-                  placeholder="org1"
-                  required
+                  placeholder={mode === 'login' ? 'hadil — leave empty for platform admin' : 'HADIL'}
+                  required={mode === 'signup'}
+                  autoComplete="organization"
                   className="w-full bg-[#0F1626] border border-[#1F2A44] rounded-xl px-4 py-3 text-xs text-slate-100 font-medium placeholder-slate-500 focus:outline-none focus:border-emerald-500"
                 />
+                {mode === 'login' && (
+                  <p className="text-[10px] text-slate-500">
+                    Customer accounts resolve as username@organization. Organization name/slug is case-insensitive.
+                  </p>
+                )}
               </div>
             )}
 

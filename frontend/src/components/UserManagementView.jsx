@@ -6,9 +6,9 @@ import {
 import api from '../api';
 
 export default function UserManagementView({ databases = [], activeDbId = '', currentUser = null, currentRole = null }) {
-  const isMasterAdmin = currentRole === 'MASTER_ADMIN' || currentUser?.role === 'MASTER_ADMIN';
-  const isOrgSuAdmin = currentRole === 'SUADMIN' || currentUser?.role === 'SUADMIN';
-  const canAssignAdmin = isMasterAdmin || isOrgSuAdmin;
+  const isMasterAdmin = currentRole === 'MASTER_ADMIN' || currentUser?.platformRole === 'MASTER_ADMIN' || currentUser?.authorityType === 'PLATFORM';
+  const isOrgSuAdmin = currentRole === 'SUADMIN' || currentUser?.organizationRole === 'SUADMIN' || currentUser?.authorityType === 'ORGANIZATION';
+  const canAssignAdmin = isOrgSuAdmin || isMasterAdmin;
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
@@ -122,11 +122,13 @@ export default function UserManagementView({ databases = [], activeDbId = '', cu
               Enterprise User & RBAC Management
             </h2>
             <span className="text-[10px] bg-purple-950 border border-purple-800 text-purple-300 font-extrabold px-2.5 py-0.5 rounded-full uppercase tracking-wider">
-              ADMIN ONLY
+              {isOrgSuAdmin ? 'SUADMIN' : 'ADMIN'}
             </span>
           </div>
           <p className="text-xs text-slate-400 font-medium mt-1">
-            Manage user credentials and database-scoped roles (ADMIN, EDITOR, VIEWER).
+            {isOrgSuAdmin
+              ? 'Organization administration: create users and assign database-scoped ADMIN, EDITOR, and VIEWER roles. SUADMIN authority does not require an active database.'
+              : 'Manage user credentials and database-scoped roles (ADMIN, EDITOR, VIEWER).'}
           </p>
         </div>
 

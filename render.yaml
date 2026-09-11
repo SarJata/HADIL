@@ -5,7 +5,9 @@ services:
     name: hadil
     runtime: python
     plan: starter
-    buildCommand: pip install -r requirements.txt && npm --prefix frontend ci && npm --prefix frontend run build
+    # Copy Vite output next to the API so runtime serving does not depend on
+    # gitignored frontend/dist remaining in the Render slug.
+    buildCommand: pip install -r requirements.txt && npm --prefix frontend ci && npm --prefix frontend run build && mkdir -p backend/static_frontend && cp -a frontend/dist/. backend/static_frontend/
     # Repo-root cwd: add backend/ to sys.path so `main:app` and sibling imports resolve.
     startCommand: uvicorn main:app --app-dir backend --host 0.0.0.0 --port $PORT
     envVars:

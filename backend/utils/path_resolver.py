@@ -43,6 +43,51 @@ def resolve_bundled_resource(relative_path: str) -> str:
     clean_path = relative_path.lstrip("/\\")
     return os.path.join(get_bundle_dir(), clean_path)
 
+
+def _is_frontend_dist(path: str) -> bool:
+    return os.path.isfile(os.path.join(path, "index.html"))
+
+
+def resolve_frontend_dist() -> str:
+    """
+    Locate the Vite production build (frontend/dist) for same-origin SPA serving.
+
+    Frozen Windows builds keep the PyInstaller _MEIPASS layout.
+    Cloud/source runs also search cwd and ancestors so Render's repo-root
+    working directory is found even if __file__ is not two levels below root.
+    """
+    relative = os.path.join("frontend", "dist")
+    if is_frozen():
+        return os.path.join(get_bundle_dir(), relative)
+
+    here = os.path.dirname(os.path.abspath(__file__))
+    backend_dir = os.path.abspath(os.path.join(here, ".."))
+    repo_from_file = os.path.abspath(os.path.join(here, "..", ".."))
+    candidates = [
+        os.path.join(repo_from_file, relative),
+        os.path.join(os.path.abspath(os.getcwd()), relative),
+        # Render copies Vite output here so gitignored frontend/dist still serves.
+        os.path.join(backend_dir, "static_frontend"),
+    ]
+    for start in (here, os.getcwd()):
+        cur = os.path.abspath(start)
+        for _ in range(8):
+            candidates.append(os.path.join(cur, relative))
+            parent = os.path.dirname(cur)
+            if parent == cur:
+                break
+            cur = parent
+
+    seen = set()
+    for path in candidates:
+        normalized = os.path.abspath(path)
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        if _is_frontend_dist(normalized):
+            return normalized
+    return os.path.join(repo_from_file, relative)
+
 def resolve_user_data_resource(relative_path: str) -> str:
     """Resolves path for writable persistent user resources (e.g. metadata db, policy docs, faiss index)."""
     clean_path = relative_path.lstrip("/\\")

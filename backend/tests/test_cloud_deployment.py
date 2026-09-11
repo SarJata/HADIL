@@ -1,6 +1,7 @@
 """Cloud / desktop deployment-mode tests. Existing Windows V1 tests remain in sibling modules."""
 
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -264,6 +265,14 @@ class TestRenderAsgiImportPath(unittest.TestCase):
         self.assertIn("uvicorn main:app --app-dir backend", start)
         self.assertNotIn("backend.main:app", start)
 
+    def test_render_yaml_build_copies_frontend_dist_next_to_backend(self):
+        yaml_path = os.path.join(REPO_ROOT, "render.yaml")
+        with open(yaml_path, encoding="utf-8") as handle:
+            body = handle.read()
+        self.assertIn("npm --prefix frontend run build", body)
+        self.assertIn("backend/static_frontend", body)
+        self.assertIn("cp -a frontend/dist/.", body)
+
     def test_repo_root_cannot_import_main_without_backend_on_path(self):
         script = (
             "import os, sys\n"
@@ -430,6 +439,107 @@ class TestCloudStartupIsolation(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("GET_MODEL_LAZY_OK", result.stdout)
+
+
+class TestFrontendDistResolution(unittest.TestCase):
+    def test_backend_static_frontend_is_accepted(self):
+        from utils import path_resolver
+        tmp = tempfile.mkdtemp(prefix="hadil_backend_spa_")
+        previous_cwd = os.getcwd()
+        try:
+            utils_dir = os.path.join(tmp, "backend", "utils")
+            dist = os.path.join(tmp, "backend", "static_frontend")
+            os.makedirs(utils_dir)
+            os.makedirs(dist)
+            with open(os.path.join(dist, "index.html"), "w", encoding="utf-8") as handle:
+                handle.write("<!doctype html><title>HADIL-SPA-COPY</title>")
+            os.chdir(tmp)
+            fake_file = os.path.join(utils_dir, "path_resolver.py")
+            with patch.object(path_resolver, "is_frozen", return_value=False), patch.object(
+                path_resolver, "__file__", fake_file
+            ):
+                resolved = path_resolver.resolve_frontend_dist()
+            self.assertEqual(os.path.normpath(resolved), os.path.normpath(dist))
+        finally:
+            os.chdir(previous_cwd)
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_frozen_frontend_dist_stays_under_bundle_dir(self):
+        from utils import path_resolver
+        meipass = os.path.join(tempfile.gettempdir(), "hadil_fake_meipass")
+        with patch.object(path_resolver, "is_frozen", return_value=True), patch.object(
+            path_resolver, "get_bundle_dir", return_value=meipass
+        ):
+            resolved = path_resolver.resolve_frontend_dist()
+        self.assertEqual(
+            os.path.normpath(resolved),
+            os.path.normpath(os.path.join(meipass, "frontend", "dist")),
+        )
+
+    def test_cwd_frontend_dist_found_when_file_relative_path_missing(self):
+        from utils import path_resolver
+        tmp = tempfile.mkdtemp(prefix="hadil_spa_")
+        previous_cwd = os.getcwd()
+        try:
+            dist = os.path.join(tmp, "frontend", "dist")
+            os.makedirs(dist)
+            index_path = os.path.join(dist, "index.html")
+            with open(index_path, "w", encoding="utf-8") as handle:
+                handle.write("<!doctype html><title>HADIL-SPA</title>")
+            os.chdir(tmp)
+            fake_file = os.path.join(os.path.abspath(os.sep), "nonexistent_hadil", "backend", "utils", "path_resolver.py")
+            with patch.object(path_resolver, "is_frozen", return_value=False), patch.object(
+                path_resolver, "__file__", fake_file
+            ):
+                resolved = path_resolver.resolve_frontend_dist()
+            self.assertTrue(os.path.isfile(os.path.join(resolved, "index.html")))
+            self.assertEqual(os.path.normpath(resolved), os.path.normpath(dist))
+        finally:
+            os.chdir(previous_cwd)
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_import_main_serves_index_and_docs_when_dist_present(self):
+        dist_index = os.path.join(REPO_ROOT, "frontend", "dist", "index.html")
+        if not os.path.isfile(dist_index):
+            self.skipTest("frontend/dist/index.html is not built")
+        backend_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        script = (
+            "import os, sys\n"
+            "os.environ['HADIL_DEPLOYMENT_MODE'] = 'cloud'\n"
+            "os.environ['HADIL_JWT_SECRET'] = 'cloud-test-secret-not-default-value'\n"
+            "os.environ['HADIL_METADATA_DB'] = './test_cloud_spa_metadata.db'\n"
+            "os.environ.pop('PYTHONPATH', None)\n"
+            f"sys.path.insert(0, {backend_dir!r})\n"
+            "from fastapi.testclient import TestClient\n"
+            "from uvicorn.importer import import_from_string\n"
+            "app = import_from_string('main:app')\n"
+            "client = TestClient(app)\n"
+            "root = client.get('/')\n"
+            "assert root.status_code == 200, root.text\n"
+            "assert 'text/html' in root.headers.get('content-type', '')\n"
+            "assert b'<html' in root.content.lower() or b'<!doctype html' in root.content.lower()\n"
+            "docs = client.get('/docs')\n"
+            "assert docs.status_code == 200, docs.status_code\n"
+            "assert 'swagger' in docs.text.lower() or 'openapi' in docs.text.lower()\n"
+            "health = client.get('/health')\n"
+            "assert health.status_code == 200\n"
+            "assert health.json()['deployment_mode'] == 'cloud'\n"
+            "print('SPA_MOUNT_OK')\n"
+        )
+        env = os.environ.copy()
+        env.pop("PYTHONPATH", None)
+        env["HADIL_DEPLOYMENT_MODE"] = "cloud"
+        env["HADIL_JWT_SECRET"] = "cloud-test-secret-not-default-value"
+        env["HADIL_METADATA_DB"] = "./test_cloud_spa_metadata.db"
+        result = subprocess.run(
+            [sys.executable, "-c", script],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("SPA_MOUNT_OK", result.stdout)
 
 
 if __name__ == "__main__":

@@ -46,29 +46,45 @@ def health_check():
 
 app.include_router(api.router, prefix="/api")
 
-# Serve bundled React frontend static build
+# Serve bundled React frontend static build (same origin as /api and /docs).
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
-from utils.path_resolver import resolve_bundled_resource
+from utils.path_resolver import resolve_frontend_dist
 
-static_dist_path = resolve_bundled_resource("frontend/dist")
-if os.path.exists(static_dist_path):
+static_dist_path = resolve_frontend_dist()
+index_html_path = os.path.join(static_dist_path, "index.html")
+if os.path.isfile(index_html_path):
     print(f"[HADIL RUNTIME] Mounting static frontend assets from: {static_dist_path}")
-    app.mount("/assets", StaticFiles(directory=os.path.join(static_dist_path, "assets")), name="static_assets")
+    assets_dir = os.path.join(static_dist_path, "assets")
+    if os.path.isdir(assets_dir):
+        app.mount("/assets", StaticFiles(directory=assets_dir), name="static_assets")
 
-    @app.api_route("/{full_path:path}", methods=["GET", "HEAD"])
+    _SPA_RESERVED = {"docs", "redoc", "openapi.json", "health"}
+
+    @app.get("/", include_in_schema=False)
+    async def serve_spa_root():
+        return FileResponse(index_html_path)
+
+    @app.api_route("/{full_path:path}", methods=["GET", "HEAD"], include_in_schema=False)
     async def serve_spa(full_path: str):
         # Allow /api routes to be handled by APIRouter
         if full_path.startswith("api/") or full_path == "api":
             raise HTTPException(status_code=404, detail="API route not found")
-        
+        if full_path in _SPA_RESERVED:
+            raise HTTPException(status_code=404, detail="Not Found")
+
         # Check if requested static file exists in static_dist
         target_file = os.path.join(static_dist_path, full_path)
         if full_path and os.path.exists(target_file) and os.path.isfile(target_file):
             return FileResponse(target_file)
-        
+
         # Otherwise fallback to index.html for SPA client-side routing
-        return FileResponse(os.path.join(static_dist_path, "index.html"))
+        return FileResponse(index_html_path)
+else:
+    print(
+        f"[HADIL RUNTIME] Frontend dist not found at {static_dist_path!r} "
+        f"(cwd={os.getcwd()!r}). GET / will not serve the React app."
+    )
 
 if __name__ == "__main__":
     import uvicorn

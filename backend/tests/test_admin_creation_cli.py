@@ -13,7 +13,8 @@ from main import app
 from database.metadata_db import metadata_manager, MetadataBase, HadilUser, HadilSystemRole, verify_password
 from services.metadata_service import metadata_service
 from cli.admin_console import AdminConsole
-from validators.security import decode_access_token
+from validators.security import decode_access_token, create_access_token
+from database.manager import db_manager
 
 client = TestClient(app)
 
@@ -217,6 +218,83 @@ class TestMasterAdminCreationCLI(unittest.TestCase):
         editor_headers = {"Authorization": f"Bearer {editor_login.json()['access_token']}"}
         editor_users_res = client.get("/api/users", headers=editor_headers)
         self.assertEqual(editor_users_res.status_code, 403)
+
+    def test_16_suadmin_not_named_admin_can_assign_admin_on_selected_database(self):
+        """MASTER_ADMIN named SuAdmin can grant database-scoped ADMIN on the selected DB."""
+        su = metadata_service.create_master_admin("SuAdmin", "SuAdminPass123!")
+        metadata_service.register_or_update_database("OtherDb", "Other Database", "sqlite")
+        db_manager.current_db_id = "sales.db"
+
+        headers = {"Authorization": f"Bearer {create_access_token(su.id, su.username)}"}
+        create_admin = client.post(
+            "/api/users",
+            json={"username": "db_admin_b", "password": "UserBPass123!", "role": "ADMIN"},
+            headers=headers,
+        )
+        self.assertEqual(create_admin.status_code, 200, create_admin.text)
+        user_b_id = create_admin.json()["user_id"]
+        self.assertEqual(metadata_service.get_user_role_for_database(user_b_id, "sales.db"), "ADMIN")
+        self.assertIsNone(metadata_service.get_user_role_for_database(user_b_id, "OtherDb"))
+        self.assertTrue(metadata_service.check_permission(user_b_id, "sales.db", "DELETE"))
+        self.assertTrue(metadata_service.check_permission(user_b_id, "sales.db", "MANAGE_USERS"))
+        self.assertFalse(metadata_service.check_permission(user_b_id, "OtherDb", "DELETE"))
+        self.assertEqual(metadata_service.get_user_role_for_database(su.id, "sales.db"), "MASTER_ADMIN")
+
+        create_editor = client.post(
+            "/api/users",
+            json={"username": "editor_c", "password": "EditorPass123!", "role": "EDITOR"},
+            headers=headers,
+        )
+        self.assertEqual(create_editor.status_code, 200, create_editor.text)
+        editor_id = create_editor.json()["user_id"]
+        create_viewer = client.post(
+            "/api/users",
+            json={"username": "viewer_d", "password": "ViewerPass123!", "role": "VIEWER"},
+            headers=headers,
+        )
+        self.assertEqual(create_viewer.status_code, 200, create_viewer.text)
+        viewer_id = create_viewer.json()["user_id"]
+
+        db_admin_headers = {"Authorization": f"Bearer {create_access_token(user_b_id, 'db_admin_b')}"}
+        blocked_admin = client.post(
+            "/api/users",
+            json={"username": "should_fail_admin", "password": "Nope123!", "role": "ADMIN"},
+            headers=db_admin_headers,
+        )
+        self.assertEqual(blocked_admin.status_code, 403, blocked_admin.text)
+
+        editor_headers = {"Authorization": f"Bearer {create_access_token(editor_id, 'editor_c')}"}
+        blocked_editor = client.post(
+            "/api/users",
+            json={"username": "should_fail_editor", "password": "Nope123!", "role": "ADMIN"},
+            headers=editor_headers,
+        )
+        self.assertEqual(blocked_editor.status_code, 403, blocked_editor.text)
+
+        viewer_headers = {"Authorization": f"Bearer {create_access_token(viewer_id, 'viewer_d')}"}
+        blocked_viewer = client.post(
+            "/api/users",
+            json={"username": "should_fail_viewer", "password": "Nope123!", "role": "ADMIN"},
+            headers=viewer_headers,
+        )
+        self.assertEqual(blocked_viewer.status_code, 403, blocked_viewer.text)
+
+        assign_ok = client.post(
+            f"/api/users/{editor_id}/roles",
+            json={"user_id": editor_id, "role": "VIEWER"},
+            headers=headers,
+        )
+        self.assertEqual(assign_ok.status_code, 200, assign_ok.text)
+
+    def test_17_user_management_ui_uses_master_admin_role_not_username(self):
+        repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+        path = os.path.join(repo_root, "frontend", "src", "components", "UserManagementView.jsx")
+        with open(path, encoding="utf-8") as handle:
+            src = handle.read()
+        self.assertNotIn("username === 'admin'", src)
+        self.assertIn("MASTER_ADMIN", src)
+        self.assertIn("Only a Master Admin can assign the ADMIN role to new users.", src)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -5,8 +5,8 @@ import {
 } from 'lucide-react';
 import api from '../api';
 
-export default function UserManagementView({ databases = [], activeDbId = '', currentUser = null }) {
-  const isMasterAdmin = currentUser?.username === 'admin';
+export default function UserManagementView({ databases = [], activeDbId = '', currentUser = null, currentRole = null }) {
+  const isMasterAdmin = currentRole === 'MASTER_ADMIN' || currentUser?.role === 'MASTER_ADMIN';
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
@@ -221,7 +221,7 @@ export default function UserManagementView({ databases = [], activeDbId = '', cu
                 </select>
                 {!isMasterAdmin && (
                   <p className="text-[10px] text-amber-400 font-medium">
-                    * Only Master Admin ('admin') can assign ADMIN role to new users.
+                    * Only a Master Admin can assign the ADMIN role to new users.
                   </p>
                 )}
               </div>

@@ -644,15 +644,17 @@ async def create_user_endpoint(
 ):
     try:
         user_role = metadata_service.get_user_role_for_database(int(current_user["sub"]), db_manager.current_db_id or "default")
-        is_master = (current_user["username"] in ["admin", "v1_master_admin"] or user_role in ["MASTER_ADMIN", "SUADMIN"])
+        is_master = user_role == "MASTER_ADMIN"
         target_role = (request.role or "VIEWER").upper()
 
-        # Only Master Super Admin can create DB Admin accounts
+        # Only MASTER_ADMIN (SuAdmin) can create DB Admin accounts
         if target_role == "ADMIN" and not is_master:
             raise HTTPException(
                 status_code=403,
-                detail="Access Denied: Only Master Super Admin can create or assign ADMIN roles."
+                detail="Access Denied: Only Master Admin (MASTER_ADMIN) can create or assign ADMIN roles."
             )
+        if target_role == "ADMIN" and not db_manager.current_db_id:
+            raise HTTPException(status_code=400, detail="No active database selected.")
 
         new_user = metadata_service.create_user(request.username, request.password)
         if db_manager.current_db_id and target_role:
@@ -673,16 +675,15 @@ async def assign_role_endpoint(
         raise HTTPException(status_code=400, detail="No active database selected.")
 
     user_role = metadata_service.get_user_role_for_database(int(current_user["sub"]), db_manager.current_db_id or "default")
-    is_master = (current_user["username"] in ["admin", "v1_master_admin"] or user_role in ["MASTER_ADMIN", "SUADMIN"])
-
+    is_master = user_role == "MASTER_ADMIN"
 
     target_role = request.role.upper()
 
-    # Only Master Super Admin can assign ADMIN roles
+    # Only MASTER_ADMIN (SuAdmin) can assign ADMIN database roles
     if target_role == "ADMIN" and not is_master:
         raise HTTPException(
             status_code=403,
-            detail="Access Denied: Only Master Super Admin ('admin') can assign ADMIN roles."
+            detail="Access Denied: Only Master Admin (MASTER_ADMIN) can assign ADMIN roles."
         )
 
     role_rec = metadata_service.assign_user_role(user_id, db_manager.current_db_id, target_role)

@@ -860,7 +860,7 @@ export default function App() {
 
           {/* VIEW MODE 1: USER MANAGEMENT & SUADMIN */}
           {currentView === 'user-management' && (permissions.includes('MANAGE_USERS') || role === 'ADMIN' || role === 'MASTER_ADMIN') ? (
-            <UserManagementView databases={databases} activeDbId={selectedDbId} currentUser={user} />
+            <UserManagementView databases={databases} activeDbId={selectedDbId} currentUser={user} currentRole={role} />
           ) : currentView === 'suadmin' && (permissions.includes('MANAGE_USERS') || role === 'ADMIN' || role === 'MASTER_ADMIN') ? (
             <SuAdminView databases={databases} activeDbId={selectedDbId} />
           ) : currentView === 'policy-documents' ? (

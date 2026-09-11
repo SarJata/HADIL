@@ -22,6 +22,19 @@ Do not start `HADIL.exe`, `hadil_runtime.py` desktop mode, tkinter splash, or th
 - `HADIL_ALLOWED_ORIGINS` — comma-separated browser origins if the UI is not same-origin. Do not use `*`.
 - `HADIL_DATA_DIR` — writable directory for policy files, FAISS index, and embedding cache
 
+HADIL-owned AI provider credentials (set in the Render dashboard after deploy; never put real values in Git):
+
+- `HADIL_GEMINI_API_KEY`
+- `HADIL_OPENAI_API_KEY`
+- `HADIL_ANTHROPIC_API_KEY`
+- `HADIL_SARVAM_API_KEY`
+
+HADIL is the service provider: these keys belong to HADIL, not to customer organizations.
+
+- Platform MASTER_ADMIN / SuAdmin enables or disables which providers organizations may use, and sets the model HADIL uses for each provider.
+- Organization SUADMIN or database ADMIN selects only the provider (for example Gemini). They do not select a model, supply an API key, or see credentials.
+- Cloud runtime resolves: selected provider → platform model → matching `HADIL_*_API_KEY` environment variable.
+
 Optional:
 
 - `HADIL_METADATA_POOL_MODE=null` — recommended for Supabase transaction pooler (port 6543)
@@ -33,7 +46,7 @@ Optional:
 
 | Store | Purpose | Engine |
 | --- | --- | --- |
-| HADIL metadata | Users, RBAC, LLM config, registered DB records | Supabase PostgreSQL |
+| HADIL metadata | Users, RBAC, platform AI policy, organization provider selection, registered DB records | Supabase PostgreSQL |
 | Customer databases | Query/execution targets | Remote PostgreSQL or MySQL |
 
 Local SQLite file registration, upload, and directory scan remain in the shared codebase but are disabled in cloud mode.
@@ -61,3 +74,5 @@ Use the existing first-run setup screen (`/api/setup/status`). There is no backd
 4. Confirm Node.js is available in the Render build image so `npm --prefix frontend` can produce `frontend/dist`.
 5. Open the Render URL and complete first-run MASTER_ADMIN setup.
 6. Register customer PostgreSQL/MySQL databases from the UI.
+7. Add HADIL AI provider API keys in the Render environment (`HADIL_GEMINI_API_KEY`, `HADIL_OPENAI_API_KEY`, and others you intend to offer). Do not paste keys into the app, Git, or the metadata database.
+8. In the platform UI, enable the providers organizations may use. Organization admins then select a provider only.

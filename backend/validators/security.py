@@ -185,3 +185,49 @@ def enforce_org_suadmin(current_user: Dict[str, Any] = Depends(get_current_user)
         )
     return current_user
 
+
+def enforce_org_ai_provider_admin(current_user: Dict[str, Any] = Depends(get_current_user)) -> Dict[str, Any]:
+    """
+    Cloud: organization SUADMIN, or database ADMIN on the selected org database.
+    Platform MASTER_ADMIN cannot use this customer-facing endpoint.
+    """
+    from config.deployment import get_deployment_config
+    if not get_deployment_config().is_cloud:
+        raise HTTPException(
+            status_code=403,
+            detail="Organization AI provider selection is available only in cloud deployment.",
+        )
+    user_id = int(current_user["sub"])
+    if metadata_service.is_platform_master_admin(user_id):
+        raise HTTPException(
+            status_code=403,
+            detail="Access Denied: Platform Master Admin manages AI provider policy, not organization selection.",
+        )
+    user = metadata_service.get_user_by_id(user_id)
+    if not user or not user.organization_id:
+        raise HTTPException(
+            status_code=403,
+            detail="Access Denied: Organization membership is required to select an AI provider.",
+        )
+    if (user.organization_role or "").upper() == "SUADMIN":
+        return current_user
+    active_db_id = db_manager.current_db_id
+    if not active_db_id:
+        raise HTTPException(
+            status_code=403,
+            detail="Access Denied: Database ADMIN must select an organization database before changing the AI provider.",
+        )
+    database = metadata_service.get_database(active_db_id)
+    if not database or database.organization_id != user.organization_id:
+        raise HTTPException(
+            status_code=403,
+            detail="Access Denied: The selected database is not in your organization.",
+        )
+    role = metadata_service.get_user_role_for_database(user_id, active_db_id)
+    if role != "ADMIN":
+        raise HTTPException(
+            status_code=403,
+            detail="Access Denied: Only an organization SUADMIN or database ADMIN can select the AI provider.",
+        )
+    return current_user
+

@@ -84,6 +84,7 @@ from validators.security import (
     enforce_suadmin,
     enforce_platform_master,
     enforce_org_suadmin,
+    enforce_org_ai_provider_admin,
 )
 from services.metadata_service import metadata_service
 from pydantic import BaseModel, Field
@@ -136,6 +137,17 @@ class TestLLMConnectionRequest(BaseModel):
     endpoint: Optional[str] = None
     model: Optional[str] = None
     api_key: Optional[str] = None
+
+class PlatformAIProviderItem(BaseModel):
+    provider: str
+    enabled: Optional[bool] = None
+    model: Optional[str] = None
+
+class PlatformAIProvidersRequest(BaseModel):
+    providers: List[PlatformAIProviderItem]
+
+class OrganizationAIProviderRequest(BaseModel):
+    provider: str
 
 class CustomConnectionRequest(BaseModel):
     connection_uri: str
@@ -1203,11 +1215,20 @@ async def execute_form(
         db.rollback()
         return {"success": False, "error": str(e)}
 
-# --- Admin LLM Configuration Endpoints ---
+def _reject_cloud_desktop_llm_admin():
+    if get_deployment_config().is_cloud:
+        raise HTTPException(
+            status_code=403,
+            detail="Cloud AI credentials are managed by HADIL. Platform policy is at /api/platform/ai-providers; organizations select a provider at /api/organization/ai-provider.",
+        )
+
+
+# --- Admin LLM Configuration Endpoints (desktop) ---
 @router.get("/admin/llm-config")
 def get_llm_configuration(
     current_user: dict = Depends(enforce_suadmin)
 ):
+    _reject_cloud_desktop_llm_admin()
     gen_config = metadata_service.get_llm_config("generator")
     ver_config = metadata_service.get_llm_config("verifier")
     return {
@@ -1232,6 +1253,7 @@ def update_llm_configuration(
     req: LLMConfigRequest,
     current_user: dict = Depends(enforce_suadmin)
 ):
+    _reject_cloud_desktop_llm_admin()
     # Retrieve current configs to preserve backend model & api_key when provider is changed from frontend
     curr_gen = metadata_service.get_llm_config_internal("generator")
     curr_ver = metadata_service.get_llm_config_internal("verifier")
@@ -1270,6 +1292,7 @@ def test_llm_connection(
     req: TestLLMConnectionRequest,
     current_user: dict = Depends(enforce_suadmin)
 ):
+    _reject_cloud_desktop_llm_admin()
     from ai_modules.providers import CustomProvider, OpenAIProvider, QwenProvider
     p_type = req.provider_type.lower().strip()
     
@@ -1294,6 +1317,74 @@ def test_llm_connection(
 
     res = provider.health_check()
     return res
+
+
+def _require_cloud_ai():
+    if not get_deployment_config().is_cloud:
+        raise HTTPException(status_code=403, detail="This AI provider API is available only in cloud deployment.")
+
+
+@router.get("/platform/ai-providers")
+def get_platform_ai_providers(
+    current_user: dict = Depends(enforce_platform_master),
+):
+    _require_cloud_ai()
+    from services import ai_provider_service
+    return {"providers": ai_provider_service.list_platform_providers()}
+
+
+@router.put("/platform/ai-providers")
+def put_platform_ai_providers(
+    req: PlatformAIProvidersRequest,
+    current_user: dict = Depends(enforce_platform_master),
+):
+    _require_cloud_ai()
+    from services import ai_provider_service
+    try:
+        providers = ai_provider_service.update_platform_providers(
+            [
+                {
+                    "provider": item.provider,
+                    "enabled": item.enabled,
+                    "model": item.model,
+                }
+                for item in req.providers
+            ]
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"providers": providers}
+
+
+@router.get("/organization/ai-provider")
+def get_organization_ai_provider(
+    current_user: dict = Depends(enforce_org_ai_provider_admin),
+):
+    from services import ai_provider_service
+    user = metadata_service.get_user_by_id(int(current_user["sub"]))
+    selected = ai_provider_service.get_organization_provider(user.organization_id)
+    return {
+        "provider": selected,
+        "available_providers": ai_provider_service.list_org_available_providers(),
+    }
+
+
+@router.put("/organization/ai-provider")
+def put_organization_ai_provider(
+    req: OrganizationAIProviderRequest,
+    current_user: dict = Depends(enforce_org_ai_provider_admin),
+):
+    from services import ai_provider_service
+    user = metadata_service.get_user_by_id(int(current_user["sub"]))
+    try:
+        selected = ai_provider_service.set_organization_provider(user.organization_id, req.provider)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {
+        "provider": selected,
+        "available_providers": ai_provider_service.list_org_available_providers(),
+    }
+
 
 class AddDirectoryRequest(BaseModel):
     path: str
@@ -1489,9 +1580,13 @@ def get_system_status_endpoint(
     rag_ok = policy_rag_service.is_initialized
     faiss_ok = os.path.exists(FAISS_INDEX_PATH)
 
-    cfg = metadata_service.get_llm_config_internal("generator")
-    provider = cfg.get("provider_type", "openai").title()
-    model = cfg.get("model") or "default"
+    if get_deployment_config().is_cloud:
+        provider = "HADIL"
+        model = "platform-managed"
+    else:
+        cfg = metadata_service.get_llm_config_internal("generator")
+        provider = cfg.get("provider_type", "openai").title()
+        model = cfg.get("model") or "default"
 
     dirs = metadata_service.list_db_directories()
     policy_count = len(metadata_service.list_policy_documents())

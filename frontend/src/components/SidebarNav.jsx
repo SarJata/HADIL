@@ -28,7 +28,7 @@ export default function SidebarNav({
     ? (isOrgSuAdmin || role === 'ADMIN')
     : (permissions.includes('MANAGE_USERS') || role === 'ADMIN' || role === 'MASTER_ADMIN' || role === 'SUADMIN');
   const canConfigureProviders = isCloud
-    ? (isOrgSuAdmin || isPlatformMaster)
+    ? (isOrgSuAdmin || isPlatformMaster || role === 'ADMIN')
     : (role === 'ADMIN' || role === 'MASTER_ADMIN' || role === 'SUADMIN');
   const dynamicTables = tables && tables.length > 0 ? tables : (dbInsights.tables || []);
   
@@ -322,11 +322,11 @@ export default function SidebarNav({
             {canConfigureProviders && (
               <button
                 onClick={onOpenSettings}
-                title="AI Models & Providers"
+                title={isCloud ? "AI Provider" : "AI Models & Providers"}
                 className="w-full flex items-center gap-3 px-3.5 py-2 rounded-xl text-xs font-semibold text-slate-300 hover:bg-[#131A2B] hover:text-white transition-all cursor-pointer"
               >
                 <Cpu className="w-4 h-4 text-emerald-400 shrink-0" />
-                {!isCollapsed && <span className="truncate">AI Models & Providers</span>}
+                {!isCollapsed && <span className="truncate">{isCloud ? 'AI Provider' : 'AI Models & Providers'}</span>}
               </button>
             )}
 

@@ -552,8 +552,27 @@ OllamaProvider = QwenProvider
 def get_llm_provider(target: str = "generator") -> BaseLLMProvider:
     """
     Returns configured BaseLLMProvider instance for target ('generator' or 'verifier').
-    Checks HADIL Metadata DB first; falls back to environment variables.
+    Cloud: organization-selected provider, platform model, HADIL environment credential.
+    Desktop: HADIL Metadata DB first; falls back to environment variables.
     """
+    from config.deployment import get_deployment_config
+    if get_deployment_config().is_cloud:
+        from services.ai_provider_service import AIProviderConfigError, resolve_cloud_llm_runtime
+        from database.manager import db_manager
+        try:
+            runtime = resolve_cloud_llm_runtime(database_id=db_manager.current_db_id)
+        except AIProviderConfigError as err:
+            raise RuntimeError(str(err))
+        logger.info("provider=%s configured=%s", runtime.provider_type, bool(runtime.api_key))
+        p_type = runtime.provider_type
+        if p_type == "sarvam":
+            return SarvamProvider(model=runtime.model, api_key=runtime.api_key)
+        if p_type in ("gemini", "google"):
+            return GeminiProvider(model=runtime.model, api_key=runtime.api_key)
+        if p_type in ("claude", "anthropic"):
+            return ClaudeProvider(model=runtime.model, api_key=runtime.api_key)
+        return OpenAIProvider(model=runtime.model, api_key=runtime.api_key)
+
     try:
         from services.metadata_service import metadata_service
         config = metadata_service.get_llm_config_internal(target)

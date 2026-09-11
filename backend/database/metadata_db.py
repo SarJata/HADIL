@@ -4,7 +4,7 @@ import hashlib
 import json
 import secrets
 from typing import Optional, List, Dict, Any
-from sqlalchemy import create_engine, Column, Integer, String, DateTime, ForeignKey, Text, text
+from sqlalchemy import create_engine, Column, Integer, String, DateTime, ForeignKey, Text, Boolean, text
 
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, relationship, Session
@@ -30,6 +30,8 @@ class HadilOrganization(MetadataBase):
     name = Column(String, nullable=False)
     slug = Column(String, unique=True, nullable=False, index=True)
     status = Column(String, nullable=False, default=STATUS_PENDING)
+    # Cloud: organization selects a HADIL-allowed provider only (no model, no API key).
+    ai_provider = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
 
@@ -160,6 +162,16 @@ class HadilPinnedWidget(MetadataBase):
     database = relationship("HadilDatabase", back_populates="pinned_widgets")
 
 
+class HadilPlatformAIProvider(MetadataBase):
+    """Platform-level AI provider policy. No API keys are stored here."""
+    __tablename__ = "hadil_platform_ai_providers"
+
+    provider_type = Column(String, primary_key=True)
+    enabled = Column(Boolean, nullable=False, default=True)
+    model = Column(String, nullable=True)
+    updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
+
+
 class HadilLLMConfig(MetadataBase):
     __tablename__ = "hadil_llm_config"
 
@@ -271,6 +283,7 @@ class MetadataDatabaseManager:
         self._ensure_column("hadil_users", "organization_id", "INTEGER")
         self._ensure_column("hadil_users", "account_status", "VARCHAR")
         self._ensure_column("hadil_users", "organization_role", "VARCHAR")
+        self._ensure_column("hadil_organizations", "ai_provider", "VARCHAR")
         self._backfill_account_status()
 
     def _backfill_account_status(self):

@@ -1307,6 +1307,7 @@ export default function App() {
         selectedDbId={selectedDbId}
         currentDbName={currentDbName}
         userRole={role}
+        capabilities={capabilities}
       />
 
       {/* CONNECT DATABASE MODAL */}

@@ -27,3 +27,12 @@ services:
         sync: false
       - key: HADIL_ALLOWED_ORIGINS
         sync: false
+      # HADIL-owned AI credentials. Set values in the Render dashboard; never commit secrets.
+      - key: HADIL_GEMINI_API_KEY
+        sync: false
+      - key: HADIL_OPENAI_API_KEY
+        sync: false
+      - key: HADIL_ANTHROPIC_API_KEY
+        sync: false
+      - key: HADIL_SARVAM_API_KEY
+        sync: false

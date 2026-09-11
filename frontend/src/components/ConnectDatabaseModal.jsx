@@ -43,7 +43,7 @@ export default function ConnectDatabaseModal({
   userRole = '',
   capabilities = DEFAULT_DESKTOP_CAPABILITIES
 }) {
-  const isSuAdmin = userRole === 'MASTER_ADMIN';
+  const isSuAdmin = userRole === 'MASTER_ADMIN' || userRole === 'SUADMIN';
   const allowSqliteImport = Boolean(
     isSuAdmin && (capabilities.sqlite_upload || capabilities.sqlite_file_location)
   );

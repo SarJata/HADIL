@@ -1,4 +1,5 @@
 import os
+import re
 import logging
 import hashlib
 from typing import Optional, List, Dict, Any
@@ -9,6 +10,7 @@ from database.metadata_db import (
     HadilUser,
     HadilUserDatabaseRole,
     HadilSystemRole,
+    HadilOrganization,
     HadilDatabaseFAQ,
     HadilSchemaSnapshot,
     HadilQueryHistoryMeta,
@@ -16,7 +18,13 @@ from database.metadata_db import (
     HadilLLMConfig,
     HadilDBDirectory,
     HadilPolicyDocument,
-    hash_password
+    hash_password,
+    STATUS_PENDING,
+    STATUS_ACTIVE,
+    STATUS_SUSPENDED,
+    STATUS_REJECTED,
+    ORG_ROLE_SUADMIN,
+    DB_ROLES,
 )
 
 from services.secret_service import encrypt_secret, decrypt_secret
@@ -38,7 +46,8 @@ class MetadataService:
         name: str,
         database_type: str = "sqlite",
         connection_uri: Optional[str] = None,
-        status: str = "active"
+        status: str = "active",
+        organization_id: Optional[int] = None,
     ) -> HadilDatabase:
         db: Session = metadata_manager.get_session()
         try:
@@ -52,7 +61,8 @@ class MetadataService:
                     database_type=database_type,
                     connection_uri_hash=uri_hash,
                     connection_uri_encrypted=uri_encrypted,
-                    status=status
+                    status=status,
+                    organization_id=organization_id,
                 )
                 db.add(db_record)
                 db.flush()
@@ -64,6 +74,8 @@ class MetadataService:
                     db_record.connection_uri_hash = uri_hash
                     db_record.connection_uri_encrypted = uri_encrypted
                 db_record.status = status
+                if organization_id is not None and not db_record.organization_id:
+                    db_record.organization_id = organization_id
             db.commit()
             db.refresh(db_record)
             return db_record
@@ -178,16 +190,20 @@ class MetadataService:
             db.close()
 
     @staticmethod
-    def list_registered_databases() -> List[Dict[str, Any]]:
+    def list_registered_databases(organization_id: Optional[int] = None) -> List[Dict[str, Any]]:
         db: Session = metadata_manager.get_session()
         try:
-            records = db.query(HadilDatabase).all()
+            q = db.query(HadilDatabase)
+            if organization_id is not None:
+                q = q.filter(HadilDatabase.organization_id == organization_id)
+            records = q.all()
             return [
                 {
                     "id": r.id,
                     "name": r.name,
                     "database_type": r.database_type,
                     "status": r.status,
+                    "organization_id": r.organization_id,
                     "created_at": r.created_at.isoformat() if r.created_at else None
                 }
                 for r in records
@@ -215,7 +231,12 @@ class MetadataService:
 
     @staticmethod
     def _grant_master_admins_role_on_database(db_session: Session, database_id: str, role: str = "ADMIN") -> None:
-        """Attach database-scoped ADMIN roles for MASTER_ADMIN users after a real DB is registered."""
+        """Desktop only: attach DB ADMIN for MASTER_ADMIN after a real DB is registered.
+
+        Cloud MASTER_ADMIN is a platform role and must not receive customer UserDatabaseRole rows.
+        """
+        if get_deployment_config().is_cloud:
+            return
         masters = db_session.query(HadilSystemRole).filter(HadilSystemRole.role == "MASTER_ADMIN").all()
         for sys_role in masters:
             existing = db_session.query(HadilUserDatabaseRole).filter(
@@ -249,7 +270,11 @@ class MetadataService:
                 raise ValueError(f"User '{username}' already exists.")
             
             hashed = hash_password(password_raw)
-            user = HadilUser(username=username, password_hash=hashed)
+            user = HadilUser(
+                username=username,
+                password_hash=hashed,
+                account_status=STATUS_ACTIVE,
+            )
             db.add(user)
             db.commit()
             db.refresh(user)
@@ -307,7 +332,13 @@ class MetadataService:
             db_ids = MetadataService._discover_registered_database_ids(db_session)
 
             hashed = hash_password(password_raw)
-            user = HadilUser(username=username.strip(), password_hash=hashed)
+            user = HadilUser(
+                username=username.strip(),
+                password_hash=hashed,
+                account_status=STATUS_ACTIVE,
+                organization_id=None,
+                organization_role=None,
+            )
             db_session.add(user)
             db_session.flush()
 
@@ -315,7 +346,9 @@ class MetadataService:
             sys_role = HadilSystemRole(slot=1, user_id=user.id, role="MASTER_ADMIN")
             db_session.add(sys_role)
 
-            MetadataService._assign_admin_roles_for_databases(db_session, user.id, db_ids)
+            # Cloud: platform MASTER_ADMIN must not receive customer DB roles or default_db.
+            if not get_deployment_config().is_cloud:
+                MetadataService._assign_admin_roles_for_databases(db_session, user.id, db_ids)
 
             db_session.commit()
             db_session.refresh(user)
@@ -328,10 +361,13 @@ class MetadataService:
                 db_session.close()
 
     @staticmethod
-    def list_users() -> List[Dict[str, Any]]:
+    def list_users(organization_id: Optional[int] = None) -> List[Dict[str, Any]]:
         db: Session = metadata_manager.get_session()
         try:
-            users = db.query(HadilUser).all()
+            q = db.query(HadilUser)
+            if organization_id is not None:
+                q = q.filter(HadilUser.organization_id == organization_id)
+            users = q.all()
             result = []
             for u in users:
                 roles = [
@@ -341,6 +377,9 @@ class MetadataService:
                 result.append({
                     "id": u.id,
                     "username": u.username,
+                    "organization_id": u.organization_id,
+                    "organization_role": u.organization_role,
+                    "account_status": u.account_status or STATUS_ACTIVE,
                     "roles": roles,
                     "created_at": u.created_at.isoformat() if u.created_at else None
                 })
@@ -453,6 +492,18 @@ class MetadataService:
 
         db: Session = metadata_manager.get_session()
         try:
+            user = db.query(HadilUser).filter(HadilUser.id == user_id).first()
+            if not user:
+                raise ValueError("User not found.")
+            database = db.query(HadilDatabase).filter(HadilDatabase.id == database_id).first()
+            if not database:
+                raise ValueError("Database not found.")
+            if get_deployment_config().is_cloud:
+                if not user.organization_id or not database.organization_id:
+                    raise ValueError("Database roles require an organization-owned database and user.")
+                if user.organization_id != database.organization_id:
+                    raise ValueError("Cannot assign a database role across organizations.")
+
             existing = db.query(HadilUserDatabaseRole).filter(
                 HadilUserDatabaseRole.user_id == user_id,
                 HadilUserDatabaseRole.database_id == database_id
@@ -531,7 +582,13 @@ class MetadataService:
 
             # 2. Hash password using standard HADIL hash_password helper
             hashed = hash_password(password_raw)
-            user = HadilUser(username=clean_username, password_hash=hashed)
+            user = HadilUser(
+                username=clean_username,
+                password_hash=hashed,
+                account_status=STATUS_ACTIVE,
+                organization_id=None,
+                organization_role=None,
+            )
             db_session.add(user)
             db_session.flush()
 
@@ -539,9 +596,10 @@ class MetadataService:
             sys_role = HadilSystemRole(slot=1, user_id=user.id, role="MASTER_ADMIN")
             db_session.add(sys_role)
 
-            # 4. Assign ADMIN role across all registered databases for seamless scoping
-            db_ids = MetadataService._discover_registered_database_ids(db_session)
-            MetadataService._assign_admin_roles_for_databases(db_session, user.id, db_ids)
+            # 4. Desktop: ADMIN on registered DBs. Cloud: no customer UserDatabaseRole.
+            if not get_deployment_config().is_cloud:
+                db_ids = MetadataService._discover_registered_database_ids(db_session)
+                MetadataService._assign_admin_roles_for_databases(db_session, user.id, db_ids)
 
             db_session.commit()
             db_session.refresh(user)
@@ -554,22 +612,68 @@ class MetadataService:
                 db_session.close()
 
     @staticmethod
+    def is_platform_master_admin(user_id: int, db_session: Optional[Session] = None) -> bool:
+        close_session = False
+        if db_session is None:
+            db_session = metadata_manager.get_session()
+            close_session = True
+        try:
+            rec = db_session.query(HadilSystemRole).filter(
+                HadilSystemRole.user_id == user_id,
+                HadilSystemRole.role == "MASTER_ADMIN",
+            ).first()
+            return rec is not None
+        finally:
+            if close_session:
+                db_session.close()
+
+    @staticmethod
+    def get_user_by_id(user_id: int) -> Optional[HadilUser]:
+        db: Session = metadata_manager.get_session()
+        try:
+            return db.query(HadilUser).filter(HadilUser.id == user_id).first()
+        finally:
+            db.close()
+
+    @staticmethod
     def get_user_role_for_database(user_id: int, database_id: str) -> Optional[str]:
         db: Session = metadata_manager.get_session()
         try:
-            # Check if user is MASTER_ADMIN
+            is_cloud = get_deployment_config().is_cloud
             master_rec = db.query(HadilSystemRole).filter(
                 HadilSystemRole.user_id == user_id,
                 HadilSystemRole.role == "MASTER_ADMIN"
             ).first()
             if master_rec:
+                if is_cloud:
+                    return None
                 return "MASTER_ADMIN"
+
+            user = db.query(HadilUser).filter(HadilUser.id == user_id).first()
+            if not user:
+                return None
+
+            if is_cloud and (user.organization_role or "").upper() == ORG_ROLE_SUADMIN:
+                if not database_id:
+                    return ORG_ROLE_SUADMIN
+                database = db.query(HadilDatabase).filter(HadilDatabase.id == database_id).first()
+                if database is None:
+                    return ORG_ROLE_SUADMIN
+                if database.organization_id and user.organization_id == database.organization_id:
+                    return ORG_ROLE_SUADMIN
+                return None
 
             record = db.query(HadilUserDatabaseRole).filter(
                 HadilUserDatabaseRole.user_id == user_id,
                 HadilUserDatabaseRole.database_id == database_id
             ).first()
-            return record.role if record else None
+            if not record:
+                return None
+            if is_cloud:
+                database = db.query(HadilDatabase).filter(HadilDatabase.id == database_id).first()
+                if not database or not user.organization_id or database.organization_id != user.organization_id:
+                    return None
+            return record.role
         finally:
             db.close()
 
@@ -577,18 +681,30 @@ class MetadataService:
     @staticmethod
     def check_permission(user_id: int, database_id: str, action: str) -> bool:
         """
-        Enforces Database-Scoped RBAC Rules:
-        MASTER_ADMIN: All administrative & operation permissions across all databases
-        ADMIN: READ, ADD, UPDATE, DELETE, MANAGE_USERS
-        EDITOR: READ, ADD, UPDATE
-        VIEWER: READ
+        Desktop MASTER_ADMIN: all permissions across databases.
+        Cloud SUADMIN: organization-level customer administration on owned databases.
+        ADMIN / EDITOR / VIEWER remain database-scoped.
+        Cloud MASTER_ADMIN is not a customer database role.
         """
-        role = MetadataService.get_user_role_for_database(user_id, database_id)
-        if not role:
-            return False
-        
         action_upper = action.upper()
-        if role in ["MASTER_ADMIN", "ADMIN"]:
+        role = MetadataService.get_user_role_for_database(user_id, database_id)
+        if role == ORG_ROLE_SUADMIN and action_upper == "MANAGE_USERS":
+            return True
+        if not role:
+            if action_upper == "MANAGE_USERS":
+                session = metadata_manager.get_session()
+                try:
+                    user = session.query(HadilUser).filter(HadilUser.id == user_id).first()
+                    if user and (user.organization_role or "").upper() == ORG_ROLE_SUADMIN:
+                        return True
+                    if not get_deployment_config().is_cloud:
+                        return MetadataService.is_platform_master_admin(user_id, session)
+                    return False
+                finally:
+                    session.close()
+            return False
+
+        if role in ["MASTER_ADMIN", "ADMIN", ORG_ROLE_SUADMIN]:
             return action_upper in ["READ", "ADD", "ADD_TABLE", "UPDATE", "DELETE", "MANAGE_USERS"]
         elif role == "EDITOR":
             return action_upper in ["READ", "ADD", "ADD_TABLE", "UPDATE"]
@@ -960,6 +1076,295 @@ class MetadataService:
             return False
         finally:
             db.close()
+
+    @staticmethod
+    def slugify_organization(name: str) -> str:
+        slug = re.sub(r"[^a-z0-9]+", "-", (name or "").strip().lower()).strip("-")
+        if not slug:
+            raise ValueError("Organization name must contain letters or numbers.")
+        return slug[:64]
+
+    @staticmethod
+    def validate_local_username(username: str) -> str:
+        local = (username or "").strip()
+        if not local or "@" in local:
+            raise ValueError("Username cannot be empty or contain '@'.")
+        if not re.match(r"^[A-Za-z0-9._-]{1,64}$", local):
+            raise ValueError("Username may only contain letters, numbers, dots, underscores, and hyphens.")
+        return local
+
+    @staticmethod
+    def org_login_username(local_username: str, slug: str) -> str:
+        return f"{local_username}@{slug}"
+
+    @staticmethod
+    def resolve_login_identifier(identifier: str) -> Optional[HadilUser]:
+        raw = (identifier or "").strip()
+        if not raw:
+            return None
+        return MetadataService.get_user_by_username(raw)
+
+    @staticmethod
+    def authenticate_user(identifier: str, password_raw: str) -> HadilUser:
+        from database.metadata_db import verify_password
+        user = MetadataService.resolve_login_identifier(identifier)
+        if not user or not verify_password(password_raw, user.password_hash):
+            raise ValueError("Invalid username or password.")
+        status = (user.account_status or STATUS_ACTIVE).upper()
+        if status == STATUS_PENDING:
+            raise PermissionError("This account is pending platform approval.")
+        if status == STATUS_SUSPENDED:
+            raise PermissionError("This account is suspended.")
+        if status == STATUS_REJECTED:
+            raise PermissionError("This registration was rejected.")
+        if user.organization_id:
+            org = MetadataService.get_organization(user.organization_id)
+            if not org:
+                raise PermissionError("Organization not found.")
+            org_status = (org.status or STATUS_ACTIVE).upper()
+            if org_status == STATUS_PENDING:
+                raise PermissionError("This organization is pending platform approval.")
+            if org_status == STATUS_SUSPENDED:
+                raise PermissionError("This organization is suspended.")
+            if org_status == STATUS_REJECTED:
+                raise PermissionError("This organization registration was rejected.")
+        return user
+
+    @staticmethod
+    def assert_account_usable(user_id: int) -> HadilUser:
+        user = MetadataService.get_user_by_id(user_id)
+        if not user:
+            raise PermissionError("Authentication required.")
+        status = (user.account_status or STATUS_ACTIVE).upper()
+        if status != STATUS_ACTIVE:
+            raise PermissionError("This account cannot access protected resources.")
+        if user.organization_id:
+            org = MetadataService.get_organization(user.organization_id)
+            if not org or (org.status or STATUS_ACTIVE).upper() != STATUS_ACTIVE:
+                raise PermissionError("This organization cannot access protected resources.")
+        return user
+
+    @staticmethod
+    def get_organization(organization_id: int) -> Optional[HadilOrganization]:
+        db: Session = metadata_manager.get_session()
+        try:
+            return db.query(HadilOrganization).filter(HadilOrganization.id == organization_id).first()
+        finally:
+            db.close()
+
+    @staticmethod
+    def database_belongs_to_org(database_id: str, organization_id: int) -> bool:
+        rec = MetadataService.get_database(database_id)
+        return bool(rec and rec.organization_id == organization_id)
+
+    @staticmethod
+    def assert_customer_database_access(user_id: int, database_id: str) -> HadilDatabase:
+        """Fail closed: knowing a database_id is not enough; org ownership is required on cloud."""
+        user = MetadataService.get_user_by_id(user_id)
+        if not user:
+            raise PermissionError("User not found.")
+        database = MetadataService.get_database(database_id)
+        if not database:
+            raise PermissionError("Database not found.")
+        if get_deployment_config().is_cloud:
+            if MetadataService.is_platform_master_admin(user_id):
+                raise PermissionError("Platform administrators cannot access customer databases.")
+            if not user.organization_id or database.organization_id != user.organization_id:
+                raise PermissionError("Database does not belong to this organization.")
+            role = MetadataService.get_user_role_for_database(user_id, database_id)
+            if not role:
+                raise PermissionError("No role on this database.")
+        else:
+            role = MetadataService.get_user_role_for_database(user_id, database_id)
+            if not role:
+                raise PermissionError("No role on this database.")
+        return database
+
+    @staticmethod
+    def signup_organization(username: str, organization_name: str, password_raw: str) -> Dict[str, Any]:
+        if not get_deployment_config().is_cloud:
+            raise ValueError("Organization signup is only available in cloud deployment.")
+        if MetadataService.get_setup_status().get("setup_required"):
+            raise ValueError("Platform setup has not been completed.")
+        local = MetadataService.validate_local_username(username)
+        slug = MetadataService.slugify_organization(organization_name)
+        if not password_raw or len(password_raw) < 4:
+            raise ValueError("Password must be at least 4 characters.")
+        login_name = MetadataService.org_login_username(local, slug)
+
+        db: Session = metadata_manager.get_session()
+        try:
+            if db.query(HadilOrganization).filter(HadilOrganization.slug == slug).first():
+                raise ValueError("An organization with this name already exists.")
+            if db.query(HadilUser).filter(HadilUser.username == login_name).first():
+                raise ValueError("That username is already registered for this organization.")
+            org = HadilOrganization(
+                name=organization_name.strip(),
+                slug=slug,
+                status=STATUS_PENDING,
+            )
+            db.add(org)
+            db.flush()
+            user = HadilUser(
+                username=login_name,
+                password_hash=hash_password(password_raw),
+                organization_id=org.id,
+                account_status=STATUS_PENDING,
+                organization_role=ORG_ROLE_SUADMIN,
+            )
+            db.add(user)
+            db.commit()
+            db.refresh(org)
+            db.refresh(user)
+            return {
+                "organization_id": org.id,
+                "organization_name": org.name,
+                "organization_slug": org.slug,
+                "organization_status": org.status,
+                "user_id": user.id,
+                "username": user.username,
+                "account_status": user.account_status,
+                "organization_role": user.organization_role,
+            }
+        except Exception:
+            db.rollback()
+            raise
+        finally:
+            db.close()
+
+    @staticmethod
+    def list_organizations(status: Optional[str] = None) -> List[Dict[str, Any]]:
+        db: Session = metadata_manager.get_session()
+        try:
+            q = db.query(HadilOrganization)
+            if status:
+                q = q.filter(HadilOrganization.status == status.upper())
+            orgs = q.order_by(HadilOrganization.created_at.desc()).all()
+            result = []
+            for org in orgs:
+                su = db.query(HadilUser).filter(
+                    HadilUser.organization_id == org.id,
+                    HadilUser.organization_role == ORG_ROLE_SUADMIN,
+                ).order_by(HadilUser.id.asc()).first()
+                result.append({
+                    "id": org.id,
+                    "name": org.name,
+                    "slug": org.slug,
+                    "status": org.status,
+                    "created_at": org.created_at.isoformat() if org.created_at else None,
+                    "suadmin_username": su.username if su else None,
+                    "suadmin_user_id": su.id if su else None,
+                    "suadmin_status": su.account_status if su else None,
+                })
+            return result
+        finally:
+            db.close()
+
+    @staticmethod
+    def set_organization_status(organization_id: int, status: str) -> Dict[str, Any]:
+        status_upper = status.upper()
+        if status_upper not in (STATUS_ACTIVE, STATUS_PENDING, STATUS_SUSPENDED, STATUS_REJECTED):
+            raise ValueError("Invalid organization status.")
+        db: Session = metadata_manager.get_session()
+        try:
+            org = db.query(HadilOrganization).filter(HadilOrganization.id == organization_id).first()
+            if not org:
+                raise ValueError("Organization not found.")
+            org.status = status_upper
+            su = db.query(HadilUser).filter(
+                HadilUser.organization_id == org.id,
+                HadilUser.organization_role == ORG_ROLE_SUADMIN,
+            ).order_by(HadilUser.id.asc()).first()
+            if status_upper == STATUS_ACTIVE and su:
+                su.account_status = STATUS_ACTIVE
+                su.organization_role = ORG_ROLE_SUADMIN
+            elif status_upper == STATUS_REJECTED and su and (su.account_status or "") == STATUS_PENDING:
+                su.account_status = STATUS_REJECTED
+            elif status_upper == STATUS_SUSPENDED:
+                pass
+            db.commit()
+            return {
+                "organization_id": org.id,
+                "status": org.status,
+                "suadmin_username": su.username if su else None,
+                "suadmin_status": su.account_status if su else None,
+                "suadmin_role": su.organization_role if su else None,
+            }
+        except Exception:
+            db.rollback()
+            raise
+        finally:
+            db.close()
+
+    @staticmethod
+    def set_user_account_status(user_id: int, status: str, actor_org_id: Optional[int] = None) -> HadilUser:
+        status_upper = status.upper()
+        if status_upper not in (STATUS_ACTIVE, STATUS_SUSPENDED):
+            raise ValueError("Invalid account status.")
+        db: Session = metadata_manager.get_session()
+        try:
+            user = db.query(HadilUser).filter(HadilUser.id == user_id).first()
+            if not user:
+                raise ValueError("User not found.")
+            if actor_org_id is not None and user.organization_id != actor_org_id:
+                raise ValueError("Cannot change account status for a user in another organization.")
+            if MetadataService.is_platform_master_admin(user.id, db) and status_upper == STATUS_SUSPENDED:
+                raise ValueError("Cannot suspend the platform administrator through this action.")
+            user.account_status = status_upper
+            db.commit()
+            db.refresh(user)
+            return user
+        except Exception:
+            db.rollback()
+            raise
+        finally:
+            db.close()
+
+    @staticmethod
+    def create_organization_user(
+        actor_user_id: int,
+        local_username: str,
+        password_raw: str,
+        database_id: Optional[str],
+        db_role: Optional[str],
+    ) -> HadilUser:
+        actor = MetadataService.get_user_by_id(actor_user_id)
+        if not actor or (actor.organization_role or "").upper() != ORG_ROLE_SUADMIN:
+            raise PermissionError("Only an organization SUADMIN can create organization users.")
+        if not actor.organization_id:
+            raise PermissionError("SUADMIN is not bound to an organization.")
+        org = MetadataService.get_organization(actor.organization_id)
+        if not org:
+            raise ValueError("Organization not found.")
+        local = MetadataService.validate_local_username(local_username)
+        login_name = MetadataService.org_login_username(local, org.slug)
+        if (db_role or "").upper() in ("MASTER_ADMIN", ORG_ROLE_SUADMIN):
+            raise PermissionError("Customer organizations cannot create MASTER_ADMIN or additional SUADMIN accounts.")
+        target_role = (db_role or "").upper() or None
+        if target_role and target_role not in DB_ROLES:
+            raise ValueError("Database role must be ADMIN, EDITOR, or VIEWER.")
+
+        new_user = MetadataService.create_user(login_name, password_raw)
+        db: Session = metadata_manager.get_session()
+        try:
+            rec = db.query(HadilUser).filter(HadilUser.id == new_user.id).first()
+            rec.organization_id = actor.organization_id
+            rec.account_status = STATUS_ACTIVE
+            rec.organization_role = None
+            db.commit()
+            db.refresh(rec)
+            created = rec
+        finally:
+            db.close()
+
+        if target_role:
+            if not database_id:
+                raise ValueError("A database must be selected to assign a database role.")
+            if not MetadataService.database_belongs_to_org(database_id, actor.organization_id):
+                raise PermissionError("Database does not belong to this organization.")
+            MetadataService.assign_user_role(created.id, database_id, target_role)
+        return created
+
 
 metadata_service = MetadataService()
 

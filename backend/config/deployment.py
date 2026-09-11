@@ -123,6 +123,7 @@ class DeploymentConfig:
             "remote_postgresql": self.remote_postgresql,
             "server_shutdown": self.server_shutdown,
             "windows_runtime": self.windows_runtime,
+            "organization_signup": self.is_cloud,
         }
 
     @classmethod

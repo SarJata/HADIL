@@ -19,8 +19,8 @@ export default function SidebarNav({
   role = null,
   permissions = []
 }) {
-  const canManageUsers = permissions.includes('MANAGE_USERS') || role === 'ADMIN' || role === 'MASTER_ADMIN';
-  const canConfigureProviders = role === 'ADMIN' || role === 'MASTER_ADMIN';
+  const canManageUsers = permissions.includes('MANAGE_USERS') || role === 'ADMIN' || role === 'MASTER_ADMIN' || role === 'SUADMIN';
+  const canConfigureProviders = role === 'ADMIN' || role === 'MASTER_ADMIN' || role === 'SUADMIN';
   const dynamicTables = tables && tables.length > 0 ? tables : (dbInsights.tables || []);
   
   // Customisable Sidebar Width State
@@ -318,6 +318,21 @@ export default function SidebarNav({
               >
                 <Cpu className="w-4 h-4 text-emerald-400 shrink-0" />
                 {!isCollapsed && <span className="truncate">AI Models & Providers</span>}
+              </button>
+            )}
+
+            {role === 'MASTER_ADMIN' && (
+              <button
+                onClick={() => onViewChange('platform-orgs')}
+                title="Pending Organizations"
+                className={`w-full flex items-center gap-3 px-3.5 py-2 rounded-xl text-xs font-semibold transition-all ${
+                  currentView === 'platform-orgs'
+                    ? 'bg-gradient-to-r from-amber-600/30 to-amber-600/10 border-l-2 border-amber-500 text-white font-bold'
+                    : 'text-slate-300 hover:bg-[#131A2B] hover:text-slate-100'
+                }`}
+              >
+                <ShieldCheck className="w-4 h-4 text-amber-400 shrink-0" />
+                {!isCollapsed && <span className="truncate">Organizations</span>}
               </button>
             )}
 

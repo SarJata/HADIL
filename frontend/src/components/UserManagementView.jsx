@@ -7,6 +7,8 @@ import api from '../api';
 
 export default function UserManagementView({ databases = [], activeDbId = '', currentUser = null, currentRole = null }) {
   const isMasterAdmin = currentRole === 'MASTER_ADMIN' || currentUser?.role === 'MASTER_ADMIN';
+  const isOrgSuAdmin = currentRole === 'SUADMIN' || currentUser?.role === 'SUADMIN';
+  const canAssignAdmin = isMasterAdmin || isOrgSuAdmin;
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
@@ -217,11 +219,11 @@ export default function UserManagementView({ databases = [], activeDbId = '', cu
                 >
                   <option value="VIEWER">VIEWER (Read Only)</option>
                   <option value="EDITOR">EDITOR (Read & Write)</option>
-                  {isMasterAdmin && <option value="ADMIN">ADMIN (Full Control / DB Admin)</option>}
+                  {canAssignAdmin && <option value="ADMIN">ADMIN (Full Control / DB Admin)</option>}
                 </select>
-                {!isMasterAdmin && (
+                {!canAssignAdmin && (
                   <p className="text-[10px] text-amber-400 font-medium">
-                    * Only a Master Admin can assign the ADMIN role to new users.
+                    * Only an organization SUADMIN can assign the ADMIN role to new users.
                   </p>
                 )}
               </div>
@@ -277,9 +279,9 @@ export default function UserManagementView({ databases = [], activeDbId = '', cu
                 >
                   <option value="VIEWER">VIEWER (Read Only)</option>
                   <option value="EDITOR">EDITOR (Read & Write)</option>
-                  {isMasterAdmin && <option value="ADMIN">ADMIN (Full Control)</option>}
+                  {canAssignAdmin && <option value="ADMIN">ADMIN (Full Control)</option>}
                 </select>
-                {!isMasterAdmin && (
+                {!canAssignAdmin && (
                   <p className="text-[10px] text-amber-400 font-medium">
                     * DB Admins can grant EDITOR and VIEWER permissions.
                   </p>

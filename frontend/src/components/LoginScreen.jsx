@@ -2,9 +2,13 @@ import React, { useState } from 'react';
 import { ShieldCheck, User, Lock, ArrowRight, Loader2, AlertCircle, KeyRound, Globe, CheckCircle2 } from 'lucide-react';
 import { getStoredServerAddress, updateServerAddress, testServerConnection } from '../api';
 
-export default function LoginScreen({ onLogin, loading, authError }) {
+export default function LoginScreen({ onLogin, onSignup, loading, authError, capabilities = {} }) {
+  const isCloud = capabilities.deployment_mode === 'cloud' || capabilities.organization_signup;
+  const [mode, setMode] = useState('login');
   const [username, setUsername] = useState('');
+  const [organization, setOrganization] = useState('');
   const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
 
   const [serverAddress, setServerAddress] = useState(getStoredServerAddress());
   const [showServerConfig, setShowServerConfig] = useState(false);
@@ -31,6 +35,16 @@ export default function LoginScreen({ onLogin, loading, authError }) {
 
   const handleSubmit = (e) => {
     e.preventDefault();
+    if (isCloud && mode === 'signup') {
+      if (!username.trim() || !organization.trim() || !password || password !== confirmPassword) return;
+      onSignup?.({
+        username: username.trim(),
+        organization: organization.trim(),
+        password,
+        confirm_password: confirmPassword,
+      });
+      return;
+    }
     if (!username.trim() || !password.trim()) return;
     onLogin(username, password);
   };
@@ -60,7 +74,9 @@ export default function LoginScreen({ onLogin, loading, authError }) {
             </p>
           </div>
           <p className="text-xs text-slate-400 font-medium">
-            Sign in to access your database-scoped analytics & AI grounding.
+            {isCloud
+              ? 'Cloud customers sign in as username@organization. Platform admins use their platform username.'
+              : 'Sign in to access your database-scoped analytics & AI grounding.'}
           </p>
         </div>
 
@@ -141,10 +157,17 @@ export default function LoginScreen({ onLogin, loading, authError }) {
             </div>
           )}
 
+          {isCloud && (
+            <div className="flex gap-2 mb-2">
+              <button type="button" onClick={() => setMode('login')} className={`flex-1 py-2 rounded-xl text-xs font-bold ${mode === 'login' ? 'bg-emerald-600 text-white' : 'bg-[#0F1626] text-slate-400'}`}>Sign In</button>
+              <button type="button" onClick={() => setMode('signup')} className={`flex-1 py-2 rounded-xl text-xs font-bold ${mode === 'signup' ? 'bg-emerald-600 text-white' : 'bg-[#0F1626] text-slate-400'}`}>Create Organization</button>
+            </div>
+          )}
+
           <form onSubmit={handleSubmit} className="space-y-5">
             <div className="space-y-2">
               <label className="text-xs font-extrabold uppercase tracking-wider text-slate-300 block">
-                Username
+                {isCloud && mode === 'login' ? 'Username@Organization' : 'Username'}
               </label>
               <div className="relative flex items-center">
                 <div className="absolute left-3.5 text-slate-400">
@@ -154,12 +177,26 @@ export default function LoginScreen({ onLogin, loading, authError }) {
                   type="text"
                   value={username}
                   onChange={(e) => setUsername(e.target.value)}
-                  placeholder="Enter your username"
+                  placeholder={isCloud && mode === 'login' ? 'admin1@org1' : 'Enter your username'}
                   required
                   className="w-full bg-[#0F1626] border border-[#1F2A44] rounded-xl pl-10 pr-4 py-3 text-xs text-slate-100 font-medium placeholder-slate-500 focus:outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20 transition-all"
                 />
               </div>
             </div>
+
+            {isCloud && mode === 'signup' && (
+              <div className="space-y-2">
+                <label className="text-xs font-extrabold uppercase tracking-wider text-slate-300 block">Organization</label>
+                <input
+                  type="text"
+                  value={organization}
+                  onChange={(e) => setOrganization(e.target.value)}
+                  placeholder="org1"
+                  required
+                  className="w-full bg-[#0F1626] border border-[#1F2A44] rounded-xl px-4 py-3 text-xs text-slate-100 font-medium placeholder-slate-500 focus:outline-none focus:border-emerald-500"
+                />
+              </div>
+            )}
 
             <div className="space-y-2">
               <label className="text-xs font-extrabold uppercase tracking-wider text-slate-300 block">
@@ -179,6 +216,20 @@ export default function LoginScreen({ onLogin, loading, authError }) {
                 />
               </div>
             </div>
+
+            {isCloud && mode === 'signup' && (
+              <div className="space-y-2">
+                <label className="text-xs font-extrabold uppercase tracking-wider text-slate-300 block">Confirm Password</label>
+                <input
+                  type="password"
+                  value={confirmPassword}
+                  onChange={(e) => setConfirmPassword(e.target.value)}
+                  placeholder="Confirm password"
+                  required
+                  className="w-full bg-[#0F1626] border border-[#1F2A44] rounded-xl px-4 py-3 text-xs text-slate-100 font-medium placeholder-slate-500 focus:outline-none focus:border-emerald-500"
+                />
+              </div>
+            )}
 
             <button
               type="submit"

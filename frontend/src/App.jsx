@@ -22,7 +22,7 @@ import UserManagementView from './components/UserManagementView';
 import SetupScreen from './components/SetupScreen';
 import PolicyManagementView from './components/PolicyManagementView';
 import CreateTableModal from './components/CreateTableModal';
-import SuAdminView from './components/SuAdminView';
+import PlatformOrganizationsView from './components/PlatformOrganizationsView';
 
 
 
@@ -163,7 +163,7 @@ export default function App() {
 
   // Reset view if view is user-management but user is not authorized
   useEffect(() => {
-    const canManage = permissions.includes('MANAGE_USERS') || role === 'ADMIN' || role === 'MASTER_ADMIN';
+    const canManage = permissions.includes('MANAGE_USERS') || role === 'ADMIN' || role === 'MASTER_ADMIN' || role === 'SUADMIN';
     if (currentView === 'user-management' && !canManage) {
       setCurrentView('overview');
     }
@@ -246,9 +246,22 @@ export default function App() {
           setAuthError(msg);
         }
       } else {
-        // Network error / connection refused / backend unreachable
         setAuthError('Could not verify credentials. Couldn\'t connect to HADIL.');
       }
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  const handleSignup = async ({ username, organization, password, confirm_password }) => {
+    setAuthLoading(true);
+    setAuthError(null);
+    try {
+      await api.post('/auth/signup', { username, organization, password, confirm_password });
+      setAuthError('Registration submitted. A platform Master Admin must approve your organization before you can sign in.');
+    } catch (err) {
+      const msg = err.response?.data?.detail || err.message || 'Registration failed.';
+      setAuthError(typeof msg === 'string' ? msg : 'Registration failed.');
     } finally {
       setAuthLoading(false);
     }
@@ -803,7 +816,7 @@ export default function App() {
 
   // If NOT Authenticated -> Render HADIL Login Screen
   if (!isAuthenticated) {
-    return <LoginScreen onLogin={handleLogin} loading={authLoading} authError={authError} />;
+    return <LoginScreen onLogin={handleLogin} onSignup={handleSignup} loading={authLoading} authError={authError} capabilities={capabilities} />;
   }
 
   return (
@@ -863,9 +876,11 @@ export default function App() {
         <main className="flex-1 bg-[#0B0F19] overflow-y-auto p-8 space-y-8 custom-scrollbar">
 
           {/* VIEW MODE 1: USER MANAGEMENT & SUADMIN */}
-          {currentView === 'user-management' && (permissions.includes('MANAGE_USERS') || role === 'ADMIN' || role === 'MASTER_ADMIN') ? (
+          {currentView === 'user-management' && (permissions.includes('MANAGE_USERS') || role === 'ADMIN' || role === 'MASTER_ADMIN' || role === 'SUADMIN') ? (
             <UserManagementView databases={databases} activeDbId={selectedDbId} currentUser={user} currentRole={role} />
-          ) : currentView === 'suadmin' && (permissions.includes('MANAGE_USERS') || role === 'ADMIN' || role === 'MASTER_ADMIN') ? (
+          ) : currentView === 'platform-orgs' && role === 'MASTER_ADMIN' ? (
+            <PlatformOrganizationsView />
+          ) : currentView === 'suadmin' && (permissions.includes('MANAGE_USERS') || role === 'ADMIN' || role === 'MASTER_ADMIN' || role === 'SUADMIN') ? (
             <SuAdminView databases={databases} activeDbId={selectedDbId} capabilities={capabilities} />
           ) : currentView === 'policy-documents' ? (
             <PolicyManagementView activeDatabase={databases.find(d => d.id === selectedDbId)} userRole={role} />

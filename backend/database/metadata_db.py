@@ -11,6 +11,32 @@ from sqlalchemy.orm import sessionmaker, relationship, Session
 
 MetadataBase = declarative_base()
 
+# Account / organization lifecycle (independent of RBAC roles)
+STATUS_PENDING = "PENDING"
+STATUS_ACTIVE = "ACTIVE"
+STATUS_SUSPENDED = "SUSPENDED"
+STATUS_REJECTED = "REJECTED"
+
+ORG_ROLE_SUADMIN = "SUADMIN"
+PLATFORM_ROLE_MASTER_ADMIN = "MASTER_ADMIN"
+DB_ROLES = ("ADMIN", "EDITOR", "VIEWER")
+
+
+class HadilOrganization(MetadataBase):
+    """Customer tenant. Internal id is the security boundary; slug is the login suffix."""
+    __tablename__ = "hadil_organizations"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, nullable=False)
+    slug = Column(String, unique=True, nullable=False, index=True)
+    status = Column(String, nullable=False, default=STATUS_PENDING)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
+
+    users = relationship("HadilUser", back_populates="organization")
+    databases = relationship("HadilDatabase", back_populates="organization")
+
+
 class HadilDatabase(MetadataBase):
     __tablename__ = "hadil_databases"
 
@@ -20,8 +46,11 @@ class HadilDatabase(MetadataBase):
     connection_uri_hash = Column(String, nullable=True) # Hash/reference if needed, avoid storing plaintext
     connection_uri_encrypted = Column(Text, nullable=True) # Encrypted connection string for remote RDBMS persistence
     status = Column(String, default="active")
+    organization_id = Column(Integer, ForeignKey("hadil_organizations.id"), nullable=True, index=True)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
+
+    organization = relationship("HadilOrganization", back_populates="databases")
 
 
     roles = relationship("HadilUserDatabaseRole", back_populates="database", cascade="all, delete-orphan")
@@ -35,11 +64,16 @@ class HadilUser(MetadataBase):
     __tablename__ = "hadil_users"
 
     id = Column(Integer, primary_key=True, index=True)
+    # Login identifier: platform MASTER_ADMIN uses a bare username; org users use "user@slug".
     username = Column(String, unique=True, index=True, nullable=False)
     password_hash = Column(String, nullable=False)
+    organization_id = Column(Integer, ForeignKey("hadil_organizations.id"), nullable=True, index=True)
+    account_status = Column(String, nullable=False, default=STATUS_ACTIVE)
+    organization_role = Column(String, nullable=True)  # SUADMIN inside an organization; never MASTER_ADMIN
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
 
+    organization = relationship("HadilOrganization", back_populates="users")
     roles = relationship("HadilUserDatabaseRole", back_populates="user", cascade="all, delete-orphan")
     query_histories = relationship("HadilQueryHistoryMeta", back_populates="user", cascade="all, delete-orphan")
     pinned_widgets = relationship("HadilPinnedWidget", back_populates="user", cascade="all, delete-orphan")
@@ -233,6 +267,23 @@ class MetadataDatabaseManager:
     def init_db(self):
         MetadataBase.metadata.create_all(bind=self.engine)
         self._ensure_column("hadil_databases", "connection_uri_encrypted", "TEXT")
+        self._ensure_column("hadil_databases", "organization_id", "INTEGER")
+        self._ensure_column("hadil_users", "organization_id", "INTEGER")
+        self._ensure_column("hadil_users", "account_status", "VARCHAR")
+        self._ensure_column("hadil_users", "organization_role", "VARCHAR")
+        self._backfill_account_status()
+
+    def _backfill_account_status(self):
+        """Existing users remain ACTIVE; never invent organizations for legacy rows."""
+        try:
+            with self.engine.connect() as conn:
+                conn.execute(text(
+                    "UPDATE hadil_users SET account_status = 'ACTIVE' "
+                    "WHERE account_status IS NULL OR account_status = ''"
+                ))
+                conn.commit()
+        except Exception:
+            pass
 
     def _ensure_column(self, table_name: str, column_name: str, column_type: str):
         """Dialect-safe additive migration used by both SQLite and PostgreSQL."""

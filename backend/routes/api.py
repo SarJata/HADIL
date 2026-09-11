@@ -75,10 +75,20 @@ class TestConnectionRequest(BaseModel):
     connection_uri: str
 
 from config.deployment import get_deployment_config, require_capability
-from validators.security import create_access_token, get_current_user, enforce_permission, get_current_user_optional, enforce_suadmin
+from validators.security import (
+    create_access_token,
+    get_current_user,
+    enforce_permission,
+    get_current_user_optional,
+    enforce_suadmin,
+    enforce_platform_master,
+    enforce_org_suadmin,
+)
 from services.metadata_service import metadata_service
 from pydantic import BaseModel, Field
 from database.metadata_db import verify_password
+from config.deployment import get_deployment_config
+from database.metadata_db import STATUS_PENDING, STATUS_ACTIVE, STATUS_SUSPENDED, STATUS_REJECTED
 
 class LoginRequest(BaseModel):
     username: str = Field(..., min_length=1)
@@ -92,6 +102,18 @@ class CreateUserRequest(BaseModel):
     username: str
     password: str
     role: Optional[str] = "VIEWER"
+
+class SignupRequest(BaseModel):
+    username: str = Field(..., min_length=1)
+    organization: str = Field(..., min_length=1)
+    password: str = Field(..., min_length=1)
+    confirm_password: str = Field(..., min_length=1)
+
+class OrganizationStatusRequest(BaseModel):
+    status: Optional[str] = None
+
+class AccountStatusRequest(BaseModel):
+    status: str
 
 class AssignRoleRequest(BaseModel):
     user_id: int
@@ -221,13 +243,30 @@ async def get_databases(current_user: Optional[Dict[str, Any]] = Depends(get_cur
 
     username = current_user["username"]
     user_id = int(current_user["sub"])
+    cfg = get_deployment_config()
 
-    # Master admin (SuAdmin) sees all databases
+    if cfg.is_cloud:
+        if metadata_service.is_platform_master_admin(user_id):
+            return []
+        user = metadata_service.get_user_by_id(user_id)
+        if not user or not user.organization_id:
+            return []
+        meta_dbs = {d["id"]: d for d in metadata_service.list_registered_databases(user.organization_id)}
+        allowed = []
+        for db in all_dbs:
+            if db["id"] not in meta_dbs:
+                rec = metadata_service.get_database(db["id"])
+                if not rec or rec.organization_id != user.organization_id:
+                    continue
+            role = metadata_service.get_user_role_for_database(user_id, db["id"])
+            if role is not None:
+                allowed.append(db)
+        return allowed
+
     role_check = metadata_service.get_user_role_for_database(user_id, db_manager.current_db_id or "default")
-    if role_check == "MASTER_ADMIN" or username == "admin":
+    if role_check == "MASTER_ADMIN":
         return all_dbs
 
-    # Filter to databases where user has an assigned role
     allowed_dbs = []
     for db in all_dbs:
         role = metadata_service.get_user_role_for_database(user_id, db["id"])
@@ -243,7 +282,11 @@ async def select_database(
     username = current_user["username"]
     user_id = int(current_user["sub"])
 
-    # Enforce database access scoping for non-master users
+    try:
+        metadata_service.assert_customer_database_access(user_id, request.db_id)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
+
     role = metadata_service.get_user_role_for_database(user_id, request.db_id)
     if not role:
         raise HTTPException(
@@ -275,14 +318,31 @@ async def connect_custom_db(
     current_user: Dict[str, Any] = Depends(get_current_user)
 ):
     user_id = int(current_user["sub"])
-    role = metadata_service.get_user_role_for_database(user_id, db_manager.current_db_id or "default")
-    if role != "MASTER_ADMIN" and current_user["username"] != "admin":
-        raise HTTPException(
-            status_code=403,
-            detail="Access Denied: Only Master Administrator can connect or create new databases."
-        )
+    cfg = get_deployment_config()
+    user = metadata_service.get_user_by_id(user_id)
+    if cfg.is_cloud:
+        if not user or (user.organization_role or "").upper() != "SUADMIN":
+            raise HTTPException(
+                status_code=403,
+                detail="Access Denied: Only an organization SUADMIN can register a customer database.",
+            )
+    else:
+        role = metadata_service.get_user_role_for_database(user_id, db_manager.current_db_id or "default")
+        if role != "MASTER_ADMIN":
+            raise HTTPException(
+                status_code=403,
+                detail="Access Denied: Only Master Administrator can connect or create new databases."
+            )
     try:
         config = db_manager.set_custom_connection(request.connection_uri, name=request.name)
+        if cfg.is_cloud and user and user.organization_id:
+            metadata_service.register_or_update_database(
+                db_id=config["id"],
+                name=config.get("name") or request.name or config["id"],
+                database_type="postgresql" if "postgres" in (request.connection_uri or "").lower() else "mysql",
+                connection_uri=request.connection_uri,
+                organization_id=user.organization_id,
+            )
         # Create internal HADIL tracking tables only (do not attempt to create sample app models like User/Order/Product with bare String types on remote RDBMS)
         models.HadilQueryHistory.__table__.create(bind=db_manager.engine, checkfirst=True)
         models.HadilDatabaseInsight.__table__.create(bind=db_manager.engine, checkfirst=True)
@@ -602,33 +662,70 @@ async def validate_sql_endpoint(request: ValidateRequest, is_direct_sql: bool = 
 
 @router.post("/auth/login")
 async def login(request: LoginRequest):
-    user = metadata_service.get_user_by_username(request.username)
-    if not user or not verify_password(request.password, user.password_hash):
+    try:
+        user = metadata_service.authenticate_user(request.username, request.password)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
+    except ValueError:
         raise HTTPException(status_code=401, detail="Invalid username or password.")
     token = create_access_token(user_id=user.id, username=user.username)
     return {"access_token": token, "token_type": "bearer", "username": user.username, "user_id": user.id}
+
+@router.post("/auth/signup")
+async def signup(request: SignupRequest):
+    if not get_deployment_config().is_cloud:
+        raise HTTPException(status_code=403, detail="Organization signup is only available in cloud deployment.")
+    if request.password != request.confirm_password:
+        raise HTTPException(status_code=400, detail="Passwords do not match.")
+    try:
+        result = metadata_service.signup_organization(
+            username=request.username,
+            organization_name=request.organization,
+            password_raw=request.password,
+        )
+        return {"success": True, "message": "Registration submitted and is pending platform approval.", **result}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
 @router.get("/auth/me")
 async def get_me(current_user: Dict[str, Any] = Depends(get_current_user)):
     user_id = int(current_user["sub"])
     username = current_user["username"]
     active_db_id = db_manager.current_db_id
+    user = metadata_service.get_user_by_id(user_id)
     
     target_db = active_db_id or "sales.db"
     role = metadata_service.get_user_role_for_database(user_id, target_db)
+    if metadata_service.is_platform_master_admin(user_id):
+        role = "MASTER_ADMIN"
+    elif user and (user.organization_role or "").upper() == "SUADMIN":
+        role = "SUADMIN"
     permissions = []
-    if role in ["MASTER_ADMIN", "ADMIN"]:
+    if role == "MASTER_ADMIN":
+        if get_deployment_config().is_cloud:
+            permissions = ["MANAGE_PLATFORM"]
+        else:
+            permissions = ["READ", "ADD", "UPDATE", "DELETE", "MANAGE_USERS"]
+    elif role in ["ADMIN", "SUADMIN"]:
         permissions = ["READ", "ADD", "UPDATE", "DELETE", "MANAGE_USERS"]
     elif role == "EDITOR":
         permissions = ["READ", "ADD", "UPDATE"]
     elif role == "VIEWER":
         permissions = ["READ"]
+    org = None
+    if user and user.organization_id:
+        org_rec = metadata_service.get_organization(user.organization_id)
+        if org_rec:
+            org = {"id": org_rec.id, "name": org_rec.name, "slug": org_rec.slug, "status": org_rec.status}
     return {
         "user_id": user_id,
         "username": username,
         "active_database_id": active_db_id,
         "role": role,
-        "permissions": permissions
+        "permissions": permissions,
+        "organization": org,
+        "organization_id": user.organization_id if user else None,
+        "account_status": user.account_status if user else None,
     }
 
 @router.get("/users")
@@ -636,6 +733,16 @@ async def list_users_endpoint(
     current_user: Dict[str, Any] = Depends(enforce_permission("MANAGE_USERS"))
 ):
     users = metadata_service.list_users()
+    cfg = get_deployment_config()
+    actor_id = int(current_user["sub"])
+    if cfg.is_cloud:
+        actor = metadata_service.get_user_by_id(actor_id)
+        if metadata_service.is_platform_master_admin(actor_id):
+            return [u for u in users if not u.get("organization_id")]
+        if actor and actor.organization_id:
+            users = [u for u in users if u.get("organization_id") == actor.organization_id]
+        else:
+            users = []
     return users
 
 @router.post("/users/reset-and-seed")
@@ -645,6 +752,8 @@ async def reset_and_seed_users_endpoint(
     """
     Deletes all users and creates dedicated separate ADMIN users for each database.
     """
+    if get_deployment_config().is_cloud:
+        raise HTTPException(status_code=403, detail="User reset-and-seed is not available in cloud deployment.")
     created = metadata_service.reset_and_seed_per_db_admins()
     return {"success": True, "message": "All users reset. Dedicated DB admins created.", "users": created}
 
@@ -654,15 +763,29 @@ async def create_user_endpoint(
     current_user: Dict[str, Any] = Depends(enforce_permission("MANAGE_USERS"))
 ):
     try:
-        user_role = metadata_service.get_user_role_for_database(int(current_user["sub"]), db_manager.current_db_id or "default")
-        is_master = user_role == "MASTER_ADMIN"
+        actor_id = int(current_user["sub"])
+        cfg = get_deployment_config()
         target_role = (request.role or "VIEWER").upper()
+        if target_role in ("MASTER_ADMIN", "SUADMIN"):
+            raise HTTPException(status_code=403, detail="Cannot create MASTER_ADMIN or SUADMIN through user management.")
 
-        # Only MASTER_ADMIN (SuAdmin) can create DB Admin accounts
+        if cfg.is_cloud:
+            new_user = metadata_service.create_organization_user(
+                actor_user_id=actor_id,
+                local_username=request.username,
+                password_raw=request.password,
+                database_id=db_manager.current_db_id,
+                db_role=target_role,
+            )
+            return {"success": True, "user_id": new_user.id, "username": new_user.username}
+
+        user_role = metadata_service.get_user_role_for_database(actor_id, db_manager.current_db_id or "default")
+        is_master = user_role == "MASTER_ADMIN"
+
         if target_role == "ADMIN" and not is_master:
             raise HTTPException(
                 status_code=403,
-                detail="Access Denied: Only Master Admin (MASTER_ADMIN) can create or assign ADMIN roles."
+                detail="Access Denied: Only a Master Admin can create or assign ADMIN roles."
             )
         if target_role == "ADMIN" and not db_manager.current_db_id:
             raise HTTPException(status_code=400, detail="No active database selected.")
@@ -673,6 +796,8 @@ async def create_user_endpoint(
         return {"success": True, "user_id": new_user.id, "username": new_user.username}
     except HTTPException:
         raise
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -685,16 +810,41 @@ async def assign_role_endpoint(
     if not db_manager.current_db_id:
         raise HTTPException(status_code=400, detail="No active database selected.")
 
-    user_role = metadata_service.get_user_role_for_database(int(current_user["sub"]), db_manager.current_db_id or "default")
+    actor_id = int(current_user["sub"])
+    cfg = get_deployment_config()
+    target_role = request.role.upper()
+    if target_role in ("MASTER_ADMIN", "SUADMIN"):
+        raise HTTPException(status_code=403, detail="Cannot assign MASTER_ADMIN or SUADMIN as a database role.")
+
+    if cfg.is_cloud:
+        try:
+            metadata_service.assert_customer_database_access(actor_id, db_manager.current_db_id)
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc))
+        target_user = metadata_service.get_user_by_id(user_id)
+        actor = metadata_service.get_user_by_id(actor_id)
+        if not target_user or not actor or target_user.organization_id != actor.organization_id:
+            raise HTTPException(status_code=403, detail="Cannot assign roles to users outside this organization.")
+        actor_role = metadata_service.get_user_role_for_database(actor_id, db_manager.current_db_id)
+        is_suadmin = actor and (actor.organization_role or "").upper() == "SUADMIN"
+        if target_role == "ADMIN" and not is_suadmin:
+            raise HTTPException(
+                status_code=403,
+                detail="Access Denied: Only an organization SUADMIN can assign ADMIN roles."
+            )
+        try:
+            role_rec = metadata_service.assign_user_role(user_id, db_manager.current_db_id, target_role)
+        except ValueError as exc:
+            raise HTTPException(status_code=403, detail=str(exc))
+        return {"success": True, "user_id": user_id, "database_id": db_manager.current_db_id, "role": role_rec.role}
+
+    user_role = metadata_service.get_user_role_for_database(actor_id, db_manager.current_db_id or "default")
     is_master = user_role == "MASTER_ADMIN"
 
-    target_role = request.role.upper()
-
-    # Only MASTER_ADMIN (SuAdmin) can assign ADMIN database roles
     if target_role == "ADMIN" and not is_master:
         raise HTTPException(
             status_code=403,
-            detail="Access Denied: Only Master Admin (MASTER_ADMIN) can assign ADMIN roles."
+            detail="Access Denied: Only a Master Admin can assign ADMIN roles."
         )
 
     role_rec = metadata_service.assign_user_role(user_id, db_manager.current_db_id, target_role)
@@ -1422,6 +1572,81 @@ def create_first_admin(req: SetupAdminRequest):
     except Exception as e:
         logger.error(f"Error creating initial admin: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to create initial admin: {str(e)}")
+
+@router.get("/platform/organizations")
+def list_platform_organizations(
+    status: Optional[str] = None,
+    current_user: dict = Depends(enforce_platform_master),
+):
+    if not get_deployment_config().is_cloud:
+        raise HTTPException(status_code=403, detail="Platform organization administration is cloud-only.")
+    return {"organizations": metadata_service.list_organizations(status=status)}
+
+@router.post("/platform/organizations/{organization_id}/approve")
+def approve_organization(
+    organization_id: int,
+    current_user: dict = Depends(enforce_platform_master),
+):
+    if not get_deployment_config().is_cloud:
+        raise HTTPException(status_code=403, detail="Platform organization administration is cloud-only.")
+    try:
+        result = metadata_service.set_organization_status(organization_id, STATUS_ACTIVE)
+        return {"success": True, "message": "Organization approved. First account is now SUADMIN.", **result}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+@router.post("/platform/organizations/{organization_id}/reject")
+def reject_organization(
+    organization_id: int,
+    current_user: dict = Depends(enforce_platform_master),
+):
+    if not get_deployment_config().is_cloud:
+        raise HTTPException(status_code=403, detail="Platform organization administration is cloud-only.")
+    try:
+        result = metadata_service.set_organization_status(organization_id, STATUS_REJECTED)
+        return {"success": True, **result}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+@router.post("/platform/organizations/{organization_id}/suspend")
+def suspend_organization(
+    organization_id: int,
+    current_user: dict = Depends(enforce_platform_master),
+):
+    if not get_deployment_config().is_cloud:
+        raise HTTPException(status_code=403, detail="Platform organization administration is cloud-only.")
+    try:
+        result = metadata_service.set_organization_status(organization_id, STATUS_SUSPENDED)
+        return {"success": True, **result}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+@router.post("/platform/organizations/{organization_id}/reactivate")
+def reactivate_organization(
+    organization_id: int,
+    current_user: dict = Depends(enforce_platform_master),
+):
+    if not get_deployment_config().is_cloud:
+        raise HTTPException(status_code=403, detail="Platform organization administration is cloud-only.")
+    try:
+        result = metadata_service.set_organization_status(organization_id, STATUS_ACTIVE)
+        return {"success": True, **result}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+@router.post("/platform/users/{user_id}/status")
+def set_platform_user_status(
+    user_id: int,
+    request: AccountStatusRequest,
+    current_user: dict = Depends(enforce_platform_master),
+):
+    if not get_deployment_config().is_cloud:
+        raise HTTPException(status_code=403, detail="Platform account administration is cloud-only.")
+    try:
+        user = metadata_service.set_user_account_status(user_id, request.status)
+        return {"success": True, "user_id": user.id, "account_status": user.account_status}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
 # --- Admin Policy Management Endpoints ---
 @router.post("/policies/upload")

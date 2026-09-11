@@ -45,10 +45,24 @@ def get_current_user_optional(authorization: Optional[str] = Header(None)) -> Op
 def get_current_user(authorization: Optional[str] = Header(None)) -> Dict[str, Any]:
     """
     Requires an authenticated user header. Fails closed with 401 if missing or invalid.
+    Cloud PENDING/SUSPENDED accounts cannot use protected APIs.
     """
     user_payload = get_current_user_optional(authorization)
     if not user_payload:
         raise HTTPException(status_code=401, detail="Authentication required. Missing Bearer token header.")
+    try:
+        user_id = int(user_payload["sub"])
+    except (TypeError, ValueError, KeyError):
+        raise HTTPException(status_code=401, detail="Invalid authentication token.")
+    user = metadata_service.get_user_by_id(user_id)
+    if user:
+        try:
+            metadata_service.assert_account_usable(user.id)
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc))
+        user_payload["organization_id"] = user.organization_id
+        user_payload["organization_role"] = user.organization_role
+        user_payload["account_status"] = user.account_status
     return user_payload
 
 def enforce_permission(action: str):
@@ -59,6 +73,13 @@ def enforce_permission(action: str):
     def check_user_permission(current_user: Dict[str, Any] = Depends(get_current_user)):
         user_id = int(current_user["sub"])
         active_db_id = db_manager.current_db_id or "sales.db"
+
+        from config.deployment import get_deployment_config
+        if get_deployment_config().is_cloud and action.upper() != "MANAGE_USERS" and db_manager.current_db_id:
+            try:
+                metadata_service.assert_customer_database_access(user_id, db_manager.current_db_id)
+            except PermissionError as exc:
+                raise HTTPException(status_code=403, detail=str(exc))
 
         has_permission = metadata_service.check_permission(
             user_id=user_id,
@@ -78,14 +99,44 @@ def enforce_permission(action: str):
 
 def enforce_suadmin(current_user: Dict[str, Any] = Depends(get_current_user)) -> Dict[str, Any]:
     """
-    FastAPI Dependency that strictly enforces Master Administrator (SuAdmin) access.
+    Desktop: MASTER_ADMIN via database-role lookup (existing tests patch this).
+    Cloud: platform MASTER_ADMIN via HadilSystemRole only.
     """
     user_id = int(current_user["sub"])
+    from config.deployment import get_deployment_config
+    if get_deployment_config().is_cloud:
+        if not metadata_service.is_platform_master_admin(user_id):
+            raise HTTPException(
+                status_code=403,
+                detail=f"Access Denied: Administrative feature requires platform Master Admin privileges. User '{current_user.get('username')}' is not authorized."
+            )
+        return current_user
     role = metadata_service.get_user_role_for_database(user_id, db_manager.current_db_id or "default")
     if role != "MASTER_ADMIN":
         raise HTTPException(
             status_code=403,
             detail=f"Access Denied: Administrative feature requires SuAdmin privileges. User '{current_user.get('username')}' is not authorized."
+        )
+    return current_user
+
+
+def enforce_platform_master(current_user: Dict[str, Any] = Depends(get_current_user)) -> Dict[str, Any]:
+    user_id = int(current_user["sub"])
+    if not metadata_service.is_platform_master_admin(user_id):
+        raise HTTPException(
+            status_code=403,
+            detail="Access Denied: Platform Master Admin privileges are required.",
+        )
+    return current_user
+
+
+def enforce_org_suadmin(current_user: Dict[str, Any] = Depends(get_current_user)) -> Dict[str, Any]:
+    user_id = int(current_user["sub"])
+    user = metadata_service.get_user_by_id(user_id)
+    if not user or (user.organization_role or "").upper() != "SUADMIN":
+        raise HTTPException(
+            status_code=403,
+            detail="Access Denied: Organization SUADMIN privileges are required.",
         )
     return current_user
 

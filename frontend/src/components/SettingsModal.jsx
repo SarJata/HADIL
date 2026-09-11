@@ -3,7 +3,7 @@ import { X, Database, Cpu, CheckCircle2, AlertCircle, Loader2, Globe, Key } from
 import api, { getStoredServerAddress, updateServerAddress, testServerConnection } from '../api';
 
 export default function SettingsModal({ isOpen, onClose, selectedDbId, currentDbName, userRole }) {
-  const isAdmin = userRole === 'ADMIN' || userRole === 'MASTER_ADMIN';
+  const isAdmin = userRole === 'ADMIN' || userRole === 'MASTER_ADMIN' || userRole === 'SUADMIN';
 
   const [genProvider, setGenProvider] = useState('openai');
   const [verProvider, setVerProvider] = useState('openai');

@@ -212,6 +212,7 @@ export const DEFAULT_DESKTOP_CAPABILITIES = {
   remote_postgresql: true,
   server_shutdown: true,
   windows_runtime: true,
+  organization_signup: false,
 };
 
 export const fetchDeploymentCapabilities = async () => {

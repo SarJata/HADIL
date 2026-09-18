@@ -4,7 +4,7 @@ HADIL is a secure, AI-driven database query layer. It allows users to query data
 
 ## Architecture
 
-User \u2192 React UI \u2192 FastAPI Backend \u2192 AI Modules \u2192 DB
+User -> React UI -> FastAPI Backend -> AI Modules -> DB
 
 ## 🚀 Getting Started / Run It Yourself Guide
 

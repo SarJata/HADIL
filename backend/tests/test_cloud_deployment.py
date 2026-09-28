@@ -254,7 +254,7 @@ class TestRenderAsgiImportPath(unittest.TestCase):
     """Render cwd is the repo root. backend/main.py is not importable as `main` unless backend is on sys.path."""
 
     def test_render_yaml_start_command_uses_app_dir_not_backend_main(self):
-        yaml_path = os.path.join(REPO_ROOT, "render.yaml")
+        yaml_path = os.path.join(REPO_ROOT, "deploy", "render.yaml")
         with open(yaml_path, encoding="utf-8") as handle:
             start_lines = [
                 line.strip()
@@ -267,7 +267,7 @@ class TestRenderAsgiImportPath(unittest.TestCase):
         self.assertNotIn("backend.main:app", start)
 
     def test_render_yaml_build_copies_frontend_dist_next_to_backend(self):
-        yaml_path = os.path.join(REPO_ROOT, "render.yaml")
+        yaml_path = os.path.join(REPO_ROOT, "deploy", "render.yaml")
         with open(yaml_path, encoding="utf-8") as handle:
             body = handle.read()
         self.assertIn("npm --prefix frontend run build", body)

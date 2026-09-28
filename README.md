@@ -1,98 +1,129 @@
-# HADIL - AI-Safe Database Query Execution Layer
+# HADIL Cloud (Render)
 
-HADIL is a secure, AI-driven database query layer. It allows users to query databases using natural language while enforcing strict intent verification and rule-based safety validation before any query executes.
+This is the **cloud-render** branch: HADIL as a hosted web service. It is not the Windows desktop EXE.
 
-## Architecture
+HADIL is an AI-safe database query layer. Users ask questions in natural language; the service generates SQL, verifies intent, and blocks unsafe execution before anything hits a customer database.
 
-User -> React UI -> FastAPI Backend -> AI Modules -> DB
+```text
+Browser → FastAPI (backend/) → AI providers → customer PostgreSQL/MySQL
+```
 
-## 🚀 Getting Started / Run It Yourself Guide
+## Repository layout
 
-Follow these instructions to get the HADIL project up and running on your local machine.
+| Folder | Contents |
+| --- | --- |
+| `backend/` | FastAPI app, auth, RBAC, query pipeline, tests |
+| `frontend/` | React + Vite UI |
+| `deploy/` | Render Blueprint (`render.yaml`) and `deploy/.env.example` |
 
-### Prerequisites
+Do not run `HADIL.exe`, PyInstaller, the tray app, or desktop splash on this branch.
 
-Ensure you have the following installed on your system:
-- **Python 3.9+** (for the FastAPI backend)
-- **Node.js 18+** & **npm** (for the React/Vite frontend)
-- **Git** (optional, for version control)
+## Local development
 
-### 1. Clone the Repository
-```bash
-git clone <repository-url>
+Prerequisites: Python 3.12, Node.js 20, Git.
+
+```powershell
+git clone -b cloud-render https://github.com/SarJata/HADIL.git
 cd HADIL
 ```
 
-### 2. Backend Setup (FastAPI & AI Modules)
+**Backend** (from the repo root)
 
-The backend relies on Python, FastAPI, and OpenAI for the AI intelligence layer.
+```powershell
+python -m venv backend\.venv
+.\backend\.venv\Scripts\activate
+pip install -r backend\requirements.txt
+copy deploy\.env.example backend\.env
+```
 
-1. **Navigate to the backend directory:**
-   ```bash
-   cd backend
-   ```
+Edit `backend/.env` (never commit it). For a local cloud-shaped run:
 
-2. **Create and activate a virtual environment:**
-   ```bash
-   python -m venv .venv
-   
-   # On Windows:
-   .\.venv\Scripts\activate
-   
-   # On Mac/Linux:
-   source .venv/bin/activate
-   ```
+```env
+HADIL_DEPLOYMENT_MODE=cloud
+HADIL_JWT_SECRET=replace-with-a-long-random-secret
+HADIL_METADATA_DATABASE_URL=postgresql+psycopg2://USER:PASSWORD@HOST:5432/postgres
+HADIL_ALLOWED_ORIGINS=http://localhost:5173
+```
 
-3. **Install dependencies:**
-   Install all required packages from `requirements.txt`:
-   ```bash
-   pip install -r requirements.txt
-   ```
+```powershell
+uvicorn main:app --app-dir backend --reload --host 127.0.0.1 --port 8000
+```
 
-4. **Set up Environment Variables:**
-   Create a `.env` file in the `backend/` directory. You will need a valid OpenAI API key for the generative AI features to work.
-   ```env
-   OPENAI_API_KEY=your_openai_api_key_here
-   DATABASE_FOLDER=./databases
-   ALLOWED_ORIGINS=http://localhost:5173,http://localhost:3000
-   ```
+API docs: `http://localhost:8000/docs`.
 
-5. **Run the backend server:**
-   ```bash
-   uvicorn main:app --reload
-   ```
-   The backend API will start and be available at `http://localhost:8000`. You can also view the interactive API docs at `http://localhost:8000/docs`.
+**Frontend**
 
-### 3. Frontend Setup (React + Vite)
+```powershell
+cd frontend
+npm install
+```
 
-The frontend is a modern React application built with Vite and styled with Tailwind CSS.
+Create `frontend/.env`:
 
-1. **Open a new terminal window/tab** and navigate to the frontend directory from the project root:
-   ```bash
-   cd frontend
-   ```
+```env
+VITE_API_URL=http://localhost:8000
+```
 
-2. **Install Node.js dependencies:**
-   ```bash
-   npm install
-   ```
+```powershell
+npm run dev
+```
 
-3. **Set up Environment Variables:**
-   Create a `.env` file in the `frontend/` directory to point to your local backend API:
-   ```env
-   VITE_API_URL=http://localhost:8000
-   ```
+UI: `http://localhost:5173`.
 
-4. **Start the development server:**
-   ```bash
-   npm run dev
-   ```
-   The frontend will now be running. Open `http://localhost:5173` in your browser to interact with the HADIL UI.
+## Render
 
-## Features
-- **Generative AI Mock:** Converts natural language to SQL.
-- **AI Verifier:** Extracts and compares intents to prevent unauthorized modifications.
-- **Rule-Based Validator:** Blocks `DELETE`/`UPDATE` operations and warns about inefficient queries or missing limits.
-- **React UI:** Shows the step-by-step pipeline from generation to execution.
+Create a **Python** web service from this branch. Render’s Blueprint file lives at `deploy/render.yaml` (not the repo root). If Blueprint auto-detect does not pick it up, paste these commands in the dashboard:
 
-Try searching for `Show me all users` or `Delete user` in the UI to see the validation in action!
+**Build**
+
+```text
+pip install -r backend/requirements.txt && npm --prefix frontend ci && npm --prefix frontend run build && mkdir -p backend/static_frontend && cp -a frontend/dist/. backend/static_frontend/
+```
+
+**Start**
+
+```text
+uvicorn main:app --app-dir backend --host 0.0.0.0 --port $PORT
+```
+
+Do not use `uvicorn backend.main:app`.
+
+### Required environment variables
+
+Set these in the Render dashboard. Never commit real values.
+
+| Variable | Purpose |
+| --- | --- |
+| `HADIL_DEPLOYMENT_MODE` | `cloud` (set in `deploy/render.yaml`) |
+| `HADIL_JWT_SECRET` | Signing secret; must not be the desktop default |
+| `HADIL_METADATA_DATABASE_URL` | HADIL metadata PostgreSQL (for example Supabase). Not a customer database. |
+| `HADIL_ALLOWED_ORIGINS` | Comma-separated browser origins if the UI is not same-origin. Do not use `*`. |
+| `HADIL_DATA_DIR` | Writable dir for policy files, FAISS, embedding cache |
+
+HADIL-owned provider keys (enable only the providers you offer):
+
+- `HADIL_GEMINI_API_KEY`
+- `HADIL_OPENAI_API_KEY`
+- `HADIL_ANTHROPIC_API_KEY`
+- `HADIL_SARVAM_API_KEY`
+
+Optional: `HADIL_METADATA_POOL_MODE=null` for the Supabase transaction pooler (port 6543); `HADIL_EMBEDDING_MODEL_PATH` / `HADIL_EMBEDDING_CACHE_DIR` for MiniLM; `RENDER_EXTERNAL_URL` is added to CORS when Render provides it.
+
+### Metadata vs customer databases
+
+| Store | Purpose |
+| --- | --- |
+| HADIL metadata | Users, RBAC, platform AI policy, org provider selection |
+| Customer databases | Query targets (remote PostgreSQL or MySQL only in cloud) |
+
+Local SQLite upload/scan exists in the shared codebase but is disabled in cloud mode.
+
+### First administrator
+
+Open the Render URL and complete first-run setup (`/api/setup/status`). There is no backdoor admin.
+
+Then: register customer databases in the UI, add provider keys on Render, enable providers for organizations in the platform UI.
+
+## Desktop Windows build
+
+Use the **windows-build** branch, not this one.

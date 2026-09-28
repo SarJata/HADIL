@@ -16,7 +16,8 @@ import shutil
 import subprocess
 import time
 
-PROJECT_ROOT = os.path.abspath(os.path.dirname(__file__))
+PACKAGING_DIR = os.path.abspath(os.path.dirname(__file__))
+PROJECT_ROOT = os.path.abspath(os.path.join(PACKAGING_DIR, ".."))
 FRONTEND_DIR = os.path.join(PROJECT_ROOT, "frontend")
 FRONTEND_DIST = os.path.join(FRONTEND_DIR, "dist")
 MODEL_DIR = os.path.join(PROJECT_ROOT, "models", "all-MiniLM-L6-v2")
@@ -61,7 +62,7 @@ def verify_staged_assets():
 
 def run_pyinstaller():
     log("Running PyInstaller build using HADIL.spec...")
-    spec_file = os.path.join(PROJECT_ROOT, "HADIL.spec")
+    spec_file = os.path.join(PACKAGING_DIR, "HADIL.spec")
     if not os.path.exists(spec_file):
         raise FileNotFoundError(f"HADIL.spec not found at {spec_file}")
     

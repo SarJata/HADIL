@@ -3,9 +3,8 @@
 # Keep everything required to develop, test, reproduce, and build HADIL.
 # Ignore generated artifacts, runtime state, credentials, caches, and junk.
 # =============================================================================
-# Intentionally NOT ignored (required to reproduce Windows V1 and local dev):
-#   build.py, HADIL.spec, hadil.ico, backend/, frontend/src/, frontend/public/,
-#   frontend/package.json, frontend/package-lock.json, requirements.txt,
+# Intentionally NOT ignored (windows-build):
+#   backend/, frontend/, packaging/build.py, packaging/HADIL.spec, packaging/hadil.ico,
 #   backend/requirements.txt, backend/tests/
 # =============================================================================
 
@@ -106,10 +105,14 @@ huggingface/
 
 # ----- Secrets / credentials -----
 .env
+**/.env
 .env.*
+**/.env.*
 *.env
 !.env.example
 !.env.template
+!**/.env.example
+!**/.env.template
 *.secret
 *.secrets
 *.key

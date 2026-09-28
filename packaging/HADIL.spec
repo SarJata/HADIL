@@ -5,7 +5,7 @@ from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs
 
 block_cipher = None
 
-project_root = os.path.abspath(SPECPATH)
+project_root = os.path.abspath(os.path.join(SPECPATH, '..'))
 backend_path = os.path.join(project_root, 'backend')
 
 # Explicit Read-Only Bundled Data Files
@@ -110,7 +110,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=os.path.join(project_root, 'hadil.ico'),
+    icon=os.path.join(SPECPATH, 'hadil.ico'),
 )
 
 

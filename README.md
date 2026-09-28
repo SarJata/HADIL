@@ -1,98 +1,89 @@
-# HADIL - AI-Safe Database Query Execution Layer
+# HADIL Windows desktop
 
-HADIL is a secure, AI-driven database query layer. It allows users to query databases using natural language while enforcing strict intent verification and rule-based safety validation before any query executes.
+This is the **windows-build** branch: HADIL as a local Windows application (and a PyInstaller `HADIL.exe`). It is not the Render cloud service.
 
-## Architecture
+HADIL is an AI-safe database query layer. Users ask questions in natural language; the app generates SQL, verifies intent, and blocks unsafe execution before anything hits a database.
 
-User -> React UI -> FastAPI Backend -> AI Modules -> DB
+```text
+React UI → FastAPI (bundled or local) → AI modules → SQLite / PostgreSQL / MySQL
+```
 
-## 🚀 Getting Started / Run It Yourself Guide
+## Repository layout
 
-Follow these instructions to get the HADIL project up and running on your local machine.
+| Folder | Contents |
+| --- | --- |
+| `backend/` | FastAPI app, desktop runtime, tests |
+| `frontend/` | React + Vite UI |
+| `packaging/` | `build.py`, `HADIL.spec`, `hadil.ico` |
+| `models/` | Place MiniLM weights here before building the EXE (weights are not in Git) |
 
-### Prerequisites
+## Local development
 
-Ensure you have the following installed on your system:
-- **Python 3.9+** (for the FastAPI backend)
-- **Node.js 18+** & **npm** (for the React/Vite frontend)
-- **Git** (optional, for version control)
+Prerequisites: Python 3.12, Node.js 20, Git. On Windows, `py` launcher is used by the packaging script.
 
-### 1. Clone the Repository
-```bash
-git clone <repository-url>
+```powershell
+git clone -b windows-build https://github.com/SarJata/HADIL.git
 cd HADIL
 ```
 
-### 2. Backend Setup (FastAPI & AI Modules)
+**Backend**
 
-The backend relies on Python, FastAPI, and OpenAI for the AI intelligence layer.
+```powershell
+python -m venv backend\.venv
+.\backend\.venv\Scripts\activate
+pip install -r backend\requirements.txt
+```
 
-1. **Navigate to the backend directory:**
-   ```bash
-   cd backend
-   ```
+Create `backend/.env` (never commit it):
 
-2. **Create and activate a virtual environment:**
-   ```bash
-   python -m venv .venv
-   
-   # On Windows:
-   .\.venv\Scripts\activate
-   
-   # On Mac/Linux:
-   source .venv/bin/activate
-   ```
+```env
+HADIL_DEPLOYMENT_MODE=desktop
+OPENAI_API_KEY=your_openai_api_key_here
+DATABASE_FOLDER=./databases
+ALLOWED_ORIGINS=http://localhost:5173,http://localhost:3000
+```
 
-3. **Install dependencies:**
-   Install all required packages from `requirements.txt`:
-   ```bash
-   pip install -r requirements.txt
-   ```
+From the repo root:
 
-4. **Set up Environment Variables:**
-   Create a `.env` file in the `backend/` directory. You will need a valid OpenAI API key for the generative AI features to work.
-   ```env
-   OPENAI_API_KEY=your_openai_api_key_here
-   DATABASE_FOLDER=./databases
-   ALLOWED_ORIGINS=http://localhost:5173,http://localhost:3000
-   ```
+```powershell
+uvicorn main:app --app-dir backend --reload --host 127.0.0.1 --port 8000
+```
 
-5. **Run the backend server:**
-   ```bash
-   uvicorn main:app --reload
-   ```
-   The backend API will start and be available at `http://localhost:8000`. You can also view the interactive API docs at `http://localhost:8000/docs`.
+API docs: `http://localhost:8000/docs`.
 
-### 3. Frontend Setup (React + Vite)
+**Frontend**
 
-The frontend is a modern React application built with Vite and styled with Tailwind CSS.
+```powershell
+cd frontend
+npm install
+```
 
-1. **Open a new terminal window/tab** and navigate to the frontend directory from the project root:
-   ```bash
-   cd frontend
-   ```
+Create `frontend/.env`:
 
-2. **Install Node.js dependencies:**
-   ```bash
-   npm install
-   ```
+```env
+VITE_API_URL=http://localhost:8000
+```
 
-3. **Set up Environment Variables:**
-   Create a `.env` file in the `frontend/` directory to point to your local backend API:
-   ```env
-   VITE_API_URL=http://localhost:8000
-   ```
+```powershell
+npm run dev
+```
 
-4. **Start the development server:**
-   ```bash
-   npm run dev
-   ```
-   The frontend will now be running. Open `http://localhost:5173` in your browser to interact with the HADIL UI.
+UI: `http://localhost:5173`.
 
-## Features
-- **Generative AI Mock:** Converts natural language to SQL.
-- **AI Verifier:** Extracts and compares intents to prevent unauthorized modifications.
-- **Rule-Based Validator:** Blocks `DELETE`/`UPDATE` operations and warns about inefficient queries or missing limits.
-- **React UI:** Shows the step-by-step pipeline from generation to execution.
+## Build HADIL.exe
 
-Try searching for `Show me all users` or `Delete user` in the UI to see the validation in action!
+1. Install Windows packaging extras if your `backend/requirements.txt` does not already include PyInstaller, pystray, and related desktop packages.
+2. Download `all-MiniLM-L6-v2` into `models/all-MiniLM-L6-v2/` so `model.safetensors` exists. This folder is gitignored (~87MB).
+3. From the repo root:
+
+```powershell
+py packaging\build.py
+```
+
+The pipeline builds `frontend/dist`, runs PyInstaller with `packaging/HADIL.spec`, and writes `dist/HADIL.exe`. `build/` and `dist/` are gitignored.
+
+Do not commit `.env` files, API keys, or `.exe` artifacts.
+
+## Cloud / Render
+
+Use the **cloud-render** branch, not this one.

@@ -21,11 +21,17 @@ def interpret_query_result(query: str, data: list):
         return None # Too much data, let the UI handle it as a table/chart
     
     system_prompt = "You are a specialized interpreter that converts data results into human-friendly answers."
-    user_prompt = f"""
+
+    try:
+        # Callers must normalize DB-native values (e.g. uuid.UUID) before this.
+        # Keep json.dumps inside the error boundary so unexpected types degrade
+        # gracefully instead of aborting /api/execute-query.
+        raw_data_json = json.dumps(data)
+        user_prompt = f"""
 Convert the following database query result into a concise, natural language sentence that answers the user's question.
 
 User Question: "{query}"
-Raw Data: {json.dumps(data)}
+Raw Data: {raw_data_json}
 
 Rules:
 1. Be direct and concise.
@@ -39,8 +45,6 @@ Question: "What is the latest year of sales data available?"
 Data: [{{"latest_year": 2018}}]
 Output: {{"interpretation": "The latest year of sales data available is 2018."}}
 """
-
-    try:
         provider = get_llm_provider("generator")
         res = provider.generate_json(system_prompt, user_prompt)
         interpretation = res.get("interpretation") or res.get("message") or str(res)

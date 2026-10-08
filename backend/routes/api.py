@@ -13,6 +13,7 @@ from typing import List, Optional, Dict, Any
 
 from database.session import get_db, get_engine
 from database.manager import db_manager
+from database.result_serializer import serialize_query_rows
 from database import models
 from database.schema_extractor import get_table_schema, get_filtered_tables
 from ai_modules.generator import generate_sql_from_text
@@ -995,10 +996,13 @@ async def execute_query(
     try:
         result = db.execute(text(exec_sql))
         rows = result.fetchall()
-        data = [dict(row._mapping) for row in rows]
-        
-        # Suggest visualization
-        viz_result = suggest_visualization(data)
+        # Keep driver-native values for visualization heuristics (MySQL datetime
+        # columns stay datetime objects here). Serialize immediately afterward so
+        # PostgreSQL UUID/Decimal/datetime values are JSON-safe before interpretation
+        # or the HTTP response.
+        native_rows = [dict(row._mapping) for row in rows]
+        viz_result = suggest_visualization(native_rows)
+        data = serialize_query_rows(native_rows)
         
         # Interpret result for small datasets (analytics)
         interpreted_answer = None

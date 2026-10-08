@@ -7,7 +7,7 @@ import api from '../api';
 
 export default function UserManagementView({ databases = [], activeDbId = '', currentUser = null, currentRole = null }) {
   const isMasterAdmin = currentRole === 'MASTER_ADMIN' || currentUser?.platformRole === 'MASTER_ADMIN' || currentUser?.authorityType === 'PLATFORM';
-  const isOrgSuAdmin = currentRole === 'SUADMIN' || currentUser?.organizationRole === 'SUADMIN' || currentUser?.authorityType === 'ORGANIZATION';
+  const isOrgSuAdmin = (currentUser?.organizationRole || '').toUpperCase() === 'SUADMIN';
   const canAssignAdmin = isOrgSuAdmin || isMasterAdmin;
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(false);

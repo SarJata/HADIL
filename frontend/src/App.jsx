@@ -23,6 +23,7 @@ import SetupScreen from './components/SetupScreen';
 import PolicyManagementView from './components/PolicyManagementView';
 import CreateTableModal from './components/CreateTableModal';
 import PlatformOrganizationsView from './components/PlatformOrganizationsView';
+import SuAdminView from './components/SuAdminView';
 
 
 
@@ -177,9 +178,10 @@ export default function App() {
   };
 
   const isCloudDeployment = capabilities.deployment_mode === 'cloud' || capabilities.organization_signup;
-  const isPlatformMaster = role === 'MASTER_ADMIN';
-  const isOrgSuAdmin = role === 'SUADMIN';
+  const isPlatformMaster = role === 'MASTER_ADMIN' || user?.authorityType === 'PLATFORM' || user?.platformRole === 'MASTER_ADMIN';
+  const isOrgSuAdmin = (user?.organizationRole || '').toUpperCase() === 'SUADMIN';
   const canManageOrgUsers = isOrgSuAdmin || role === 'ADMIN' || (!isCloudDeployment && (permissions.includes('MANAGE_USERS') || isPlatformMaster));
+  const canSeeSuAdminTools = isCloudDeployment ? isOrgSuAdmin : (isPlatformMaster || isOrgSuAdmin);
   const canSeePlatformOrgs = isPlatformMaster;
 
   // Reset view if view is user-management but user is not authorized
@@ -190,7 +192,11 @@ export default function App() {
     if (currentView === 'platform-orgs' && !canSeePlatformOrgs) {
       setCurrentView('overview');
     }
-  }, [canManageOrgUsers, canSeePlatformOrgs, currentView]);
+    if (currentView === 'suadmin' && !canSeeSuAdminTools) {
+      setCurrentView('overview');
+      setForbiddenToast('Access Denied: Organization SUADMIN privileges are required.');
+    }
+  }, [canManageOrgUsers, canSeePlatformOrgs, canSeeSuAdminTools, currentView]);
 
   // Save pinned widgets to localStorage on change
   useEffect(() => {
@@ -892,6 +898,7 @@ export default function App() {
           permissions={permissions}
           capabilities={capabilities}
           authorityType={user?.authorityType}
+          organizationRole={user?.organizationRole}
         />
 
         {/* Main Content Workspace */}
@@ -902,8 +909,15 @@ export default function App() {
             <UserManagementView databases={databases} activeDbId={selectedDbId} currentUser={user} currentRole={role} />
           ) : currentView === 'platform-orgs' && canSeePlatformOrgs ? (
             <PlatformOrganizationsView />
-          ) : currentView === 'suadmin' && canManageOrgUsers ? (
+          ) : currentView === 'suadmin' && canSeeSuAdminTools ? (
             <SuAdminView databases={databases} activeDbId={selectedDbId} capabilities={capabilities} />
+          ) : currentView === 'suadmin' ? (
+            <div className="p-6 rounded-2xl bg-rose-950/60 border border-rose-800/80 text-rose-100 space-y-2">
+              <h2 className="text-lg font-bold">Access Denied</h2>
+              <p className="text-sm text-rose-200">
+                Organization SUADMIN privileges are required to use SUADMIN tools.
+              </p>
+            </div>
           ) : currentView === 'policy-documents' ? (
             <PolicyManagementView activeDatabase={databases.find(d => d.id === selectedDbId)} userRole={role} />
           ) : !isConnected ? (

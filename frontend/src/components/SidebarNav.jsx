@@ -19,14 +19,16 @@ export default function SidebarNav({
   role = null,
   permissions = [],
   capabilities = {},
-  authorityType = null
+  authorityType = null,
+  organizationRole = null
 }) {
   const isCloud = capabilities.deployment_mode === 'cloud' || capabilities.organization_signup;
   const isPlatformMaster = role === 'MASTER_ADMIN' || authorityType === 'PLATFORM';
-  const isOrgSuAdmin = role === 'SUADMIN' || authorityType === 'ORGANIZATION';
+  const isOrgSuAdmin = (organizationRole || '').toUpperCase() === 'SUADMIN';
   const canManageUsers = isCloud
     ? (isOrgSuAdmin || role === 'ADMIN')
     : (permissions.includes('MANAGE_USERS') || role === 'ADMIN' || role === 'MASTER_ADMIN' || role === 'SUADMIN');
+  const canSeeSuAdminTools = isCloud ? isOrgSuAdmin : (isPlatformMaster || isOrgSuAdmin);
   const canConfigureProviders = isCloud
     ? (isOrgSuAdmin || isPlatformMaster || role === 'ADMIN')
     : (role === 'ADMIN' || role === 'MASTER_ADMIN' || role === 'SUADMIN');
@@ -346,33 +348,33 @@ export default function SidebarNav({
             )}
 
             {canManageUsers && (
-              <>
-                <button
-                  onClick={() => onViewChange('user-management')}
-                  title="User Management"
-                  className={`w-full flex items-center gap-3 px-3.5 py-2 rounded-xl text-xs font-semibold transition-all ${
-                    currentView === 'user-management'
-                      ? 'bg-gradient-to-r from-teal-600/30 to-teal-600/10 border-l-2 border-teal-500 text-white font-bold'
-                      : 'text-slate-300 hover:bg-[#131A2B] hover:text-slate-100'
-                  }`}
-                >
-                  <Users className="w-4 h-4 text-teal-400 shrink-0" />
-                  {!isCollapsed && <span className="truncate">User Management</span>}
-                </button>
+              <button
+                onClick={() => onViewChange('user-management')}
+                title="User Management"
+                className={`w-full flex items-center gap-3 px-3.5 py-2 rounded-xl text-xs font-semibold transition-all ${
+                  currentView === 'user-management'
+                    ? 'bg-gradient-to-r from-teal-600/30 to-teal-600/10 border-l-2 border-teal-500 text-white font-bold'
+                    : 'text-slate-300 hover:bg-[#131A2B] hover:text-slate-100'
+                }`}
+              >
+                <Users className="w-4 h-4 text-teal-400 shrink-0" />
+                {!isCollapsed && <span className="truncate">User Management</span>}
+              </button>
+            )}
 
-                <button
-                  onClick={() => onViewChange('suadmin')}
-                  title="SuAdmin Administration"
-                  className={`w-full flex items-center gap-3 px-3.5 py-2 rounded-xl text-xs font-semibold transition-all ${
-                    currentView === 'suadmin'
-                      ? 'bg-gradient-to-r from-emerald-600/30 to-emerald-600/10 border-l-2 border-emerald-500 text-white font-bold'
-                      : 'text-slate-300 hover:bg-[#131A2B] hover:text-slate-100'
-                  }`}
-                >
-                  <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0" />
-                  {!isCollapsed && <span className="truncate">SuAdmin Tools</span>}
-                </button>
-              </>
+            {canSeeSuAdminTools && (
+              <button
+                onClick={() => onViewChange('suadmin')}
+                title="SuAdmin Administration"
+                className={`w-full flex items-center gap-3 px-3.5 py-2 rounded-xl text-xs font-semibold transition-all ${
+                  currentView === 'suadmin'
+                    ? 'bg-gradient-to-r from-emerald-600/30 to-emerald-600/10 border-l-2 border-emerald-500 text-white font-bold'
+                    : 'text-slate-300 hover:bg-[#131A2B] hover:text-slate-100'
+                }`}
+              >
+                <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0" />
+                {!isCollapsed && <span className="truncate">SuAdmin Tools</span>}
+              </button>
             )}
           </div>
         </div>

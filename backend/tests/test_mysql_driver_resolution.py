@@ -22,9 +22,12 @@ class TestMySQLDriverResolution(unittest.TestCase):
         uri3 = "mysql+pymysql://user:pass@sql.freedb.tech:3306/testdb"
         self.assertEqual(normalize_db_uri(uri3), "mysql+pymysql://user:pass@sql.freedb.tech:3306/testdb")
 
-        # 4. Other drivers (sqlite, postgresql) -> untouched
+        # 4. SQLite is untouched; PostgreSQL is mapped to the psycopg2 dialect
         self.assertEqual(normalize_db_uri("sqlite:///test.db"), "sqlite:///test.db")
-        self.assertEqual(normalize_db_uri("postgresql://user:pass@localhost/db"), "postgresql://user:pass@localhost/db")
+        self.assertEqual(
+            normalize_db_uri("postgresql://user:pass@localhost/db"),
+            "postgresql+psycopg2://user:pass@localhost/db",
+        )
 
     def test_sqlalchemy_engine_uses_pymysql_dialect(self):
         uri = "mysql+pymysql://mockuser:mockpass@localhost:3306/mockdb"

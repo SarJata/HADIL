@@ -235,19 +235,31 @@ class TestCloudFrontendAuthorityContract(unittest.TestCase):
         self.assertIn("payload.organization", app_src)
         self.assertIn("authority_type", app_src)
         self.assertIn("canManageOrgUsers", app_src)
+        self.assertIn("canSeeSuAdminTools", app_src)
+        self.assertIn("organizationRole || '').toUpperCase() === 'SUADMIN'", app_src)
+        self.assertIn("import SuAdminView", app_src)
+        self.assertIn("currentView === 'suadmin' && !canSeeSuAdminTools", app_src)
+        self.assertIn("currentView === 'suadmin' && canSeeSuAdminTools", app_src)
         self.assertNotIn("username === 'admin'", app_src)
+        self.assertNotIn("currentView === 'suadmin' && canManageOrgUsers", app_src)
 
         users_path = os.path.join(REPO_ROOT, "frontend", "src", "components", "UserManagementView.jsx")
         with open(users_path, encoding="utf-8") as handle:
             users_src = handle.read()
         self.assertIn("isOrgSuAdmin", users_src)
+        self.assertIn("organizationRole || '').toUpperCase() === 'SUADMIN'", users_src)
         self.assertNotIn("ADMIN ONLY", users_src)
+        self.assertNotIn("authorityType === 'ORGANIZATION'", users_src)
 
         sidebar_path = os.path.join(REPO_ROOT, "frontend", "src", "components", "SidebarNav.jsx")
         with open(sidebar_path, encoding="utf-8") as handle:
             sidebar_src = handle.read()
         self.assertIn("isOrgSuAdmin", sidebar_src)
         self.assertIn("isPlatformMaster", sidebar_src)
+        self.assertIn("canSeeSuAdminTools", sidebar_src)
+        self.assertIn("organizationRole || '').toUpperCase() === 'SUADMIN'", sidebar_src)
+        self.assertNotIn("authorityType === 'ORGANIZATION'", sidebar_src)
+        self.assertNotIn("role === 'SUADMIN' || authorityType === 'ORGANIZATION'", sidebar_src)
 
 
 if __name__ == "__main__":

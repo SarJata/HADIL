@@ -8,16 +8,25 @@ logger = logging.getLogger(__name__)
 
 def normalize_db_uri(uri: str) -> str:
     """
-    Normalizes database connection URIs so MySQL connections consistently use PyMySQL
-    driver on Windows and avoid requiring MySQLdb (mysqlclient).
+    Normalizes database connection URIs for SQLAlchemy.
+
+    MySQL uses PyMySQL (mysql+pymysql://) so mysqlclient/MySQLdb is not required.
+    PostgreSQL uses psycopg2 (postgresql+psycopg2://), including postgres://
+    URIs that SQLAlchemy 2 no longer accepts as a dialect alias.
+    Password and query-string portions are preserved, including URL-encoded
+    special characters.
     """
     if not uri:
         return uri
     clean_uri = uri.strip()
     if clean_uri.startswith("mysql+mysqldb://"):
         return clean_uri.replace("mysql+mysqldb://", "mysql+pymysql://", 1)
-    elif clean_uri.startswith("mysql://"):
+    if clean_uri.startswith("mysql://"):
         return clean_uri.replace("mysql://", "mysql+pymysql://", 1)
+    if clean_uri.startswith("postgres://"):
+        return "postgresql+psycopg2://" + clean_uri[len("postgres://"):]
+    if clean_uri.startswith("postgresql://"):
+        return "postgresql+psycopg2://" + clean_uri[len("postgresql://"):]
     return clean_uri
 
 
@@ -135,7 +144,12 @@ class DatabaseManager:
                 user_msg = "Access denied or authentication failed. Please check your username and password."
             elif "operationalerror" in err_msg.lower() or "connect" in err_msg.lower():
                 user_msg = "Could not connect to database host. Please verify server address and port."
-            elif "driver" in err_msg.lower() or "module" in err_msg.lower():
+            elif (
+                "nosuchmoduleerror" in err_msg.lower()
+                or "can't load plugin: sqlalchemy.dialects" in err_msg.lower()
+                or "no module named 'psycopg2'" in err_msg.lower()
+                or "no module named 'pymysql'" in err_msg.lower()
+            ):
                 user_msg = "Required database driver is not installed on the backend server."
             else:
                 user_msg = "Could not establish database connection. Please check connection string format."

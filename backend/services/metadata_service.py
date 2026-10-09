@@ -1082,6 +1082,206 @@ class MetadataService:
         finally:
             db.close()
 
+    # --- Policy authorization (independent of database MANAGE_USERS conflation) ---
+
+    @staticmethod
+    def clean_policy_scope(scope: Optional[str]) -> str:
+        raw = (scope or "GLOBAL").strip()
+        if not raw:
+            return "GLOBAL"
+        upper = raw.upper()
+        if upper == "GLOBAL" or upper.startswith("ORGANIZATION:") or upper.startswith("DATABASE:"):
+            if upper.startswith("ORGANIZATION:"):
+                suffix = raw.split(":", 1)[1].strip()
+                return f"ORGANIZATION:{suffix}"
+            if upper.startswith("DATABASE:"):
+                suffix = raw.split(":", 1)[1].strip()
+                return f"DATABASE:{suffix}"
+            return "GLOBAL"
+        return f"DATABASE:{raw.strip()}"
+
+    @staticmethod
+    def normalize_policy_scope_for_user(user_id: int, scope: Optional[str]) -> str:
+        """
+        Normalize client-supplied policy scope.
+        Cloud GLOBAL uploads by organization members become ORGANIZATION:<org_id>
+        so tenants do not share a single platform-wide GLOBAL bucket.
+        """
+        cleaned = MetadataService.clean_policy_scope(scope)
+        if not get_deployment_config().is_cloud:
+            return cleaned
+        user = MetadataService.get_user_by_id(user_id)
+        if cleaned == "GLOBAL" and user and user.organization_id:
+            return f"ORGANIZATION:{user.organization_id}"
+        return cleaned
+
+    @staticmethod
+    def _policy_database_id(scope: str) -> Optional[str]:
+        if scope.upper().startswith("DATABASE:"):
+            return scope.split(":", 1)[1].strip()
+        return None
+
+    @staticmethod
+    def _policy_organization_id(scope: str) -> Optional[int]:
+        if scope.upper().startswith("ORGANIZATION:"):
+            suffix = scope.split(":", 1)[1].strip()
+            try:
+                return int(suffix)
+            except (TypeError, ValueError):
+                return None
+        return None
+
+    @staticmethod
+    def is_organization_policy_manager(user_id: int) -> bool:
+        """Organization-level policy admin (SUADMIN). Not database ADMIN."""
+        if MetadataService.is_platform_master_admin(user_id):
+            return False
+        user = MetadataService.get_user_by_id(user_id)
+        return bool(user and (user.organization_role or "").upper() == ORG_ROLE_SUADMIN)
+
+    @staticmethod
+    def can_manage_policy_config(user_id: int) -> bool:
+        """RAG threshold / index config is organization- or desktop-admin scoped."""
+        if get_deployment_config().is_cloud:
+            return MetadataService.is_organization_policy_manager(user_id)
+        active_db_id = "sales.db"
+        try:
+            from database.manager import db_manager
+            active_db_id = db_manager.current_db_id or active_db_id
+        except Exception:
+            pass
+        role = MetadataService.get_user_role_for_database(user_id, active_db_id)
+        return role in ("MASTER_ADMIN", "ADMIN")
+
+    @staticmethod
+    def can_manage_policy_scope(user_id: int, scope: str) -> bool:
+        """
+        Authorize policy upload/delete for a concrete scope.
+        - Cloud SUADMIN: ORGANIZATION:<own_org> and DATABASE:<dbs in own org>
+        - Cloud database ADMIN: DATABASE:<db> where role is ADMIN only
+        - Cloud MASTER_ADMIN: never (customer policy boundary)
+        - Desktop MASTER_ADMIN / ADMIN: GLOBAL and databases they administer
+        """
+        cleaned = MetadataService.clean_policy_scope(scope)
+        user = MetadataService.get_user_by_id(user_id)
+        if not user:
+            return False
+
+        if get_deployment_config().is_cloud:
+            if MetadataService.is_platform_master_admin(user_id):
+                return False
+
+            org_id = user.organization_id
+            is_suadmin = (user.organization_role or "").upper() == ORG_ROLE_SUADMIN
+
+            if cleaned == "GLOBAL":
+                # Unscoped GLOBAL is not a customer-writable cloud scope.
+                return False
+
+            org_scope_id = MetadataService._policy_organization_id(cleaned)
+            if org_scope_id is not None:
+                return bool(is_suadmin and org_id and org_scope_id == org_id)
+
+            db_id = MetadataService._policy_database_id(cleaned)
+            if not db_id:
+                return False
+            database = MetadataService.get_database(db_id)
+            if not database or not org_id or database.organization_id != org_id:
+                return False
+            if is_suadmin:
+                return True
+            return MetadataService.get_user_role_for_database(user_id, db_id) == "ADMIN"
+
+        # Desktop: MASTER_ADMIN or database ADMIN with MANAGE_USERS-equivalent role.
+        if cleaned == "GLOBAL":
+            active_db_id = "sales.db"
+            try:
+                from database.manager import db_manager
+                active_db_id = db_manager.current_db_id or active_db_id
+            except Exception:
+                pass
+            role = MetadataService.get_user_role_for_database(user_id, active_db_id)
+            if role == "MASTER_ADMIN":
+                return True
+            if role == "ADMIN":
+                return True
+            return MetadataService.is_platform_master_admin(user_id)
+
+        db_id = MetadataService._policy_database_id(cleaned)
+        if not db_id:
+            return False
+        role = MetadataService.get_user_role_for_database(user_id, db_id)
+        return role in ("MASTER_ADMIN", "ADMIN")
+
+    @staticmethod
+    def can_view_policy_document(user_id: int, scope: str) -> bool:
+        """List/read visibility; stricter than open listing, weaker than manage."""
+        cleaned = MetadataService.clean_policy_scope(scope)
+        user = MetadataService.get_user_by_id(user_id)
+        if not user:
+            return False
+
+        if get_deployment_config().is_cloud:
+            if MetadataService.is_platform_master_admin(user_id):
+                return False
+            org_id = user.organization_id
+            if not org_id:
+                return False
+
+            org_scope_id = MetadataService._policy_organization_id(cleaned)
+            if org_scope_id is not None:
+                return org_scope_id == org_id
+            if cleaned == "GLOBAL":
+                # Legacy GLOBAL docs are not cross-tenant readable on cloud.
+                return False
+
+            db_id = MetadataService._policy_database_id(cleaned)
+            if not db_id:
+                return False
+            database = MetadataService.get_database(db_id)
+            if not database or database.organization_id != org_id:
+                return False
+            role = MetadataService.get_user_role_for_database(user_id, db_id)
+            return bool(role)
+
+        return True
+
+    @staticmethod
+    def list_policy_documents_for_user(user_id: int, scope: Optional[str] = None) -> List[Dict[str, Any]]:
+        docs = MetadataService.list_policy_documents(scope=scope)
+        return [d for d in docs if MetadataService.can_view_policy_document(user_id, d.get("scope") or "GLOBAL")]
+
+    @staticmethod
+    def assert_can_manage_policy_scope(user_id: int, scope: str) -> str:
+        cleaned = MetadataService.normalize_policy_scope_for_user(user_id, scope)
+        if not MetadataService.can_manage_policy_scope(user_id, cleaned):
+            raise PermissionError(
+                "Access Denied: Policy management requires organization SUADMIN "
+                "for organization-scoped policies, or database ADMIN for that database's policies."
+            )
+        return cleaned
+
+    @staticmethod
+    def policy_retrieval_scopes(active_db_id: Optional[str] = None) -> set:
+        """
+        Backend-derived retrieval scopes for RAG. Independent of UI/authz roles.
+        Cloud: ORGANIZATION:<db.org> + DATABASE:<active_db>
+        Desktop: GLOBAL + DATABASE:<active_db>
+        """
+        scopes = set()
+        if get_deployment_config().is_cloud:
+            if active_db_id:
+                scopes.add(f"DATABASE:{active_db_id}")
+                database = MetadataService.get_database(active_db_id)
+                if database and database.organization_id:
+                    scopes.add(f"ORGANIZATION:{database.organization_id}")
+            return scopes
+
+        scopes.add("GLOBAL")
+        if active_db_id:
+            scopes.add(f"DATABASE:{active_db_id}")
+        return scopes
+
     @staticmethod
     def slugify_organization(name: str) -> str:
         slug = re.sub(r"[^a-z0-9]+", "-", (name or "").strip().lower()).strip("-")

@@ -200,7 +200,7 @@ class HadilPolicyDocument(MetadataBase):
     id = Column(String, primary_key=True, index=True)
     filename = Column(String, nullable=False)
     doc_type = Column(String, nullable=False) # "pdf", "txt", "docx"
-    scope = Column(String, nullable=False, index=True) # "GLOBAL" or "DATABASE:<database_id>"
+    scope = Column(String, nullable=False, index=True)  # GLOBAL | ORGANIZATION:<org_id> | DATABASE:<database_id>
     upload_timestamp = Column(DateTime, default=datetime.datetime.utcnow)
     uploaded_by_user_id = Column(Integer, ForeignKey("hadil_users.id"), nullable=False)
     indexing_status = Column(String, nullable=False, default="PENDING") # "INDEXED", "FAILED", "PENDING"

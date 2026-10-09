@@ -919,7 +919,12 @@ export default function App() {
               </p>
             </div>
           ) : currentView === 'policy-documents' ? (
-            <PolicyManagementView activeDatabase={databases.find(d => d.id === selectedDbId)} userRole={role} />
+            <PolicyManagementView
+              activeDatabase={databases.find(d => d.id === selectedDbId)}
+              userRole={role}
+              organizationRole={user?.organizationRole}
+              capabilities={capabilities}
+            />
           ) : !isConnected ? (
 
             /* STATE 2: DATABASE NOT CONNECTED */

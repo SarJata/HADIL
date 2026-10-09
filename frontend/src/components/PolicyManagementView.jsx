@@ -20,7 +20,12 @@ import {
   updatePolicyConfig 
 } from '../api';
 
-export default function PolicyManagementView({ activeDatabase, userRole }) {
+export default function PolicyManagementView({
+  activeDatabase,
+  userRole,
+  organizationRole = null,
+  capabilities = {},
+}) {
   const [policies, setPolicies] = useState([]);
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
@@ -35,7 +40,27 @@ export default function PolicyManagementView({ activeDatabase, userRole }) {
   const [threshold, setThreshold] = useState(0.65);
   const [configLoading, setConfigLoading] = useState(false);
 
-  const isAdmin = userRole === 'ADMIN';
+  const isCloud = capabilities.deployment_mode === 'cloud' || capabilities.organization_signup;
+  const isOrgSuAdmin =
+    (organizationRole || '').toUpperCase() === 'SUADMIN' ||
+    (userRole || '').toUpperCase() === 'SUADMIN';
+  // Cloud: SUADMIN manages org + DB policies; database ADMIN manages DATABASE scope only.
+  // Desktop: MASTER_ADMIN / ADMIN manage policies (no org SUADMIN concept).
+  const canManagePolicies = isCloud
+    ? (isOrgSuAdmin || userRole === 'ADMIN')
+    : (userRole === 'ADMIN' || userRole === 'MASTER_ADMIN' || userRole === 'SUADMIN');
+  const canManageOrgScope = isCloud ? isOrgSuAdmin : canManagePolicies;
+  const canManageConfig = isCloud ? isOrgSuAdmin : canManagePolicies;
+
+  const canDeleteDoc = (doc) => {
+    if (!canManagePolicies) return false;
+    const scope = doc?.scope || '';
+    if (scope === 'GLOBAL' || scope.startsWith('ORGANIZATION:')) {
+      return canManageOrgScope;
+    }
+    if (isOrgSuAdmin) return true;
+    return userRole === 'ADMIN' || userRole === 'MASTER_ADMIN';
+  };
 
   const loadData = async () => {
     setLoading(true);
@@ -44,7 +69,7 @@ export default function PolicyManagementView({ activeDatabase, userRole }) {
       const data = await fetchPolicies();
       setPolicies(data);
 
-      if (isAdmin) {
+      if (canManageConfig) {
         const cfg = await fetchPolicyConfig();
         if (cfg && cfg.threshold !== undefined) {
           setThreshold(cfg.threshold);
@@ -56,6 +81,12 @@ export default function PolicyManagementView({ activeDatabase, userRole }) {
       setLoading(false);
     }
   };
+
+  useEffect(() => {
+    if (!canManageOrgScope && scopeType === 'GLOBAL') {
+      setScopeType('DATABASE');
+    }
+  }, [canManageOrgScope, scopeType]);
 
   useEffect(() => {
     loadData();
@@ -71,6 +102,14 @@ export default function PolicyManagementView({ activeDatabase, userRole }) {
     e.preventDefault();
     if (!file) {
       setError('Please select a file to upload.');
+      return;
+    }
+    if (!canManageOrgScope && scopeType === 'GLOBAL') {
+      setError('Organization-level policies require SUADMIN privileges.');
+      return;
+    }
+    if (scopeType === 'DATABASE' && !activeDatabase?.id) {
+      setError('Select an organization database before uploading a database-scoped policy.');
       return;
     }
 
@@ -174,9 +213,9 @@ export default function PolicyManagementView({ activeDatabase, userRole }) {
       {/* Main Grid Layout */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         
-        {/* Upload Form Section (Admin Only) */}
+        {/* Upload Form Section (policy managers only) */}
         <div className="lg:col-span-1 space-y-4">
-          {isAdmin ? (
+          {canManagePolicies ? (
             <div className="bg-[#131A2B] border border-[#1F2A44] rounded-lg p-4 space-y-4">
               <h2 className="text-sm font-semibold text-white flex items-center space-x-2">
                 <Upload className="w-4 h-4 text-emerald-400" />
@@ -206,7 +245,13 @@ export default function PolicyManagementView({ activeDatabase, userRole }) {
                     onChange={(e) => setScopeType(e.target.value)}
                     className="w-full bg-[#0F1626] border border-[#1F2A44] text-slate-200 rounded px-3 py-1.5 text-xs focus:outline-none focus:border-emerald-500"
                   >
-                    <option value="GLOBAL">GLOBAL (Applies to all connected databases)</option>
+                    {canManageOrgScope && (
+                      <option value="GLOBAL">
+                        {isCloud
+                          ? 'ORGANIZATION (Applies across this organization)'
+                          : 'GLOBAL (Applies to all connected databases)'}
+                      </option>
+                    )}
                     <option value="DATABASE">
                       DATABASE: {activeDatabase?.name || activeDatabase?.id || 'Active Selected DB'}
                     </option>
@@ -237,13 +282,15 @@ export default function PolicyManagementView({ activeDatabase, userRole }) {
               <ShieldAlert className="w-6 h-6 text-slate-500 mx-auto mb-2" />
               <h3 className="text-xs font-semibold text-slate-300">Admin Privileges Required</h3>
               <p className="text-[11px] text-slate-500 mt-1">
-                Only ADMIN users can upload or delete policy documents.
+                {isCloud
+                  ? 'Organization SUADMIN or database ADMIN can manage policy documents within their authorized scope.'
+                  : 'Only ADMIN or MASTER_ADMIN users can upload or delete policy documents.'}
               </p>
             </div>
           )}
 
-          {/* Config Section (Admin Only) */}
-          {isAdmin && (
+          {/* Config Section (org SUADMIN / desktop admin) */}
+          {canManageConfig && (
             <div className="bg-[#131A2B] border border-[#1F2A44] rounded-lg p-4 space-y-3">
               <h2 className="text-sm font-semibold text-white flex items-center space-x-2">
                 <Sliders className="w-4 h-4 text-emerald-400" />
@@ -320,7 +367,7 @@ export default function PolicyManagementView({ activeDatabase, userRole }) {
                       <th className="px-3.5 py-2.5">Status</th>
                       <th className="px-3.5 py-2.5">Chunks</th>
                       <th className="px-3.5 py-2.5">Uploaded</th>
-                      {isAdmin && <th className="px-3.5 py-2.5 text-right">Actions</th>}
+                      {canManagePolicies && <th className="px-3.5 py-2.5 text-right">Actions</th>}
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-[#1F2A44]/60 font-mono">
@@ -331,9 +378,9 @@ export default function PolicyManagementView({ activeDatabase, userRole }) {
                           <span className="truncate max-w-xs font-sans text-xs" title={doc.filename}>{doc.filename}</span>
                         </td>
                         <td className="px-3.5 py-2.5 text-[10px]">
-                          {doc.scope === 'GLOBAL' ? (
+                          {doc.scope === 'GLOBAL' || (doc.scope || '').startsWith('ORGANIZATION:') ? (
                             <span className="px-1.5 py-0.5 rounded bg-slate-900 text-blue-300 border border-slate-700">
-                              GLOBAL
+                              {(doc.scope || '').startsWith('ORGANIZATION:') ? 'ORGANIZATION' : 'GLOBAL'}
                             </span>
                           ) : (
                             <span className="px-1.5 py-0.5 rounded bg-slate-900 text-purple-300 border border-slate-700">
@@ -358,15 +405,17 @@ export default function PolicyManagementView({ activeDatabase, userRole }) {
                         <td className="px-3.5 py-2.5 text-[11px] text-slate-400 font-sans">
                           {doc.upload_timestamp ? new Date(doc.upload_timestamp).toLocaleDateString() : 'N/A'}
                         </td>
-                        {isAdmin && (
+                        {canManagePolicies && (
                           <td className="px-3.5 py-2.5 text-right">
-                            <button
-                              onClick={() => handleDelete(doc.id, doc.filename)}
-                              className="p-1 hover:bg-rose-950/60 text-slate-400 hover:text-rose-300 rounded border border-transparent hover:border-rose-800 transition-colors"
-                              title="Delete policy"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
+                            {canDeleteDoc(doc) ? (
+                              <button
+                                onClick={() => handleDelete(doc.id, doc.filename)}
+                                className="p-1 hover:bg-rose-950/60 text-slate-400 hover:text-rose-300 rounded border border-transparent hover:border-rose-800 transition-colors"
+                                title="Delete policy"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            ) : null}
                           </td>
                         )}
                       </tr>

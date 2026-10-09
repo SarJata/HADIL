@@ -324,10 +324,14 @@ class PolicyRAGService:
             logger.warning("[POLICY RAG] Model unavailable. Returning no policy context.")
             return "", []
 
-        # Derive target scopes on backend ONLY
-        target_scopes = {"GLOBAL"}
-        if active_db_id:
-            target_scopes.add(f"DATABASE:{active_db_id}")
+        # Derive target scopes on backend ONLY (authz-independent retrieval filter).
+        # Cloud uses ORGANIZATION:<org> + DATABASE:<db>; desktop uses GLOBAL + DATABASE:<db>.
+        try:
+            target_scopes = metadata_service.policy_retrieval_scopes(active_db_id)
+        except Exception:
+            target_scopes = {"GLOBAL"}
+            if active_db_id:
+                target_scopes.add(f"DATABASE:{active_db_id}")
 
         logger.info(f"[POLICY RAG] Executing retrieval for Query: '{query}' | Active DB: '{active_db_id}' | Allowed Scopes: {target_scopes}")
 

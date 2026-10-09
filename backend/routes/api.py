@@ -86,6 +86,8 @@ from validators.security import (
     enforce_platform_master,
     enforce_org_suadmin,
     enforce_org_ai_provider_admin,
+    enforce_policy_manage,
+    enforce_policy_config,
 )
 from services.metadata_service import metadata_service
 from pydantic import BaseModel, Field
@@ -1727,8 +1729,8 @@ def set_platform_user_status(
 @router.post("/policies/upload")
 async def upload_policy_document(
     file: UploadFile = File(...),
-    scope: str = Form("GLOBAL"), # "GLOBAL" or "DATABASE:<db_id>"
-    current_user: Dict[str, Any] = Depends(enforce_permission("MANAGE_USERS"))
+    scope: str = Form("GLOBAL"),  # GLOBAL | ORGANIZATION:<id> | DATABASE:<db_id>
+    current_user: Dict[str, Any] = Depends(enforce_policy_manage)
 ):
     if not file.filename:
         raise HTTPException(status_code=400, detail="Filename is missing.")
@@ -1737,12 +1739,15 @@ async def upload_policy_document(
     if ext not in ["pdf", "txt", "docx"]:
         raise HTTPException(status_code=400, detail=f"Unsupported file extension '.{ext}'. Supported: .pdf, .txt, .docx")
 
+    user_id = int(current_user["sub"])
+    try:
+        scope_clean = metadata_service.assert_can_manage_policy_scope(user_id, scope)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
+
     # Secure document ID and safe storage path
     doc_id = f"doc_{uuid.uuid4().hex[:12]}"
     safe_filename = f"{doc_id}_{os.path.basename(file.filename)}"
-    scope_clean = scope.strip().upper()
-    if scope_clean != "GLOBAL" and not scope_clean.startswith("DATABASE:"):
-        scope_clean = f"DATABASE:{scope_clean}"
 
     safe_dir = os.path.join("./storage/policies/original", scope_clean.replace(":", "_"))
     os.makedirs(safe_dir, exist_ok=True)
@@ -1751,8 +1756,6 @@ async def upload_policy_document(
     # Path traversal check
     if not target_file_path.startswith(os.path.abspath("./storage/policies")):
         raise HTTPException(status_code=400, detail="Invalid target path (path traversal detected).")
-
-    user_id = int(current_user["sub"])
 
     try:
         # Save file to disk
@@ -1804,17 +1807,23 @@ async def upload_policy_document(
 async def list_policies(
     current_user: Dict[str, Any] = Depends(get_current_user)
 ):
-    policies = metadata_service.list_policy_documents()
-    return policies
+    user_id = int(current_user["sub"])
+    return metadata_service.list_policy_documents_for_user(user_id)
 
 @router.delete("/policies/{doc_id}")
 async def delete_policy(
     doc_id: str,
-    current_user: Dict[str, Any] = Depends(enforce_permission("MANAGE_USERS"))
+    current_user: Dict[str, Any] = Depends(enforce_policy_manage)
 ):
     doc = metadata_service.get_policy_document(doc_id)
     if not doc:
         raise HTTPException(status_code=404, detail=f"Policy document '{doc_id}' not found.")
+
+    user_id = int(current_user["sub"])
+    try:
+        metadata_service.assert_can_manage_policy_scope(user_id, doc.scope)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
 
     try:
         # Delete original file if exists
@@ -1837,7 +1846,7 @@ async def delete_policy(
 
 @router.get("/policies/config")
 async def get_policy_config(
-    current_user: Dict[str, Any] = Depends(enforce_permission("MANAGE_USERS"))
+    current_user: Dict[str, Any] = Depends(enforce_policy_config)
 ):
     return {
         "threshold": policy_rag_service.threshold,
@@ -1848,7 +1857,7 @@ async def get_policy_config(
 @router.post("/policies/config")
 async def update_policy_config(
     req: PolicyConfigThresholdRequest,
-    current_user: Dict[str, Any] = Depends(enforce_permission("MANAGE_USERS"))
+    current_user: Dict[str, Any] = Depends(enforce_policy_config)
 ):
     policy_rag_service.set_threshold(req.threshold)
     return {"success": True, "message": f"Policy threshold updated to {req.threshold}", "threshold": policy_rag_service.threshold}

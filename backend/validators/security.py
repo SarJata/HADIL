@@ -231,3 +231,59 @@ def enforce_org_ai_provider_admin(current_user: Dict[str, Any] = Depends(get_cur
         )
     return current_user
 
+
+def enforce_policy_manage(current_user: Dict[str, Any] = Depends(get_current_user)) -> Dict[str, Any]:
+    """
+    Gate Policy RAG management endpoints.
+
+    Recognizes organization SUADMIN independently of database-scoped ADMIN.
+    Does not grant SUADMIN database ADMIN rights, and does not elevate
+    database ADMIN to organization policy management.
+    Platform MASTER_ADMIN remains outside customer policy management on cloud.
+    Concrete scope checks happen in the route via metadata_service.assert_can_manage_policy_scope.
+    """
+    from config.deployment import get_deployment_config
+    user_id = int(current_user["sub"])
+
+    if get_deployment_config().is_cloud:
+        if metadata_service.is_platform_master_admin(user_id):
+            raise HTTPException(
+                status_code=403,
+                detail="Access Denied: Platform Master Admin manages organizations, not customer policy documents.",
+            )
+        if metadata_service.is_organization_policy_manager(user_id):
+            return current_user
+        # Database ADMIN may manage DATABASE-scoped policies only; route validates scope.
+        active_db_id = db_manager.current_db_id
+        if active_db_id and metadata_service.get_user_role_for_database(user_id, active_db_id) == "ADMIN":
+            return current_user
+        raise HTTPException(
+            status_code=403,
+            detail="Access Denied: Policy document management requires organization SUADMIN "
+                   "or database ADMIN on the selected organization database.",
+        )
+
+    active_db_id = db_manager.current_db_id or "sales.db"
+    role = metadata_service.get_user_role_for_database(user_id, active_db_id)
+    if role in ("MASTER_ADMIN", "ADMIN"):
+        return current_user
+    if metadata_service.is_platform_master_admin(user_id):
+        return current_user
+    raise HTTPException(
+        status_code=403,
+        detail=f"Access Denied: Only ADMIN or MASTER_ADMIN users can manage policy documents. "
+               f"User '{current_user.get('username')}' is not authorized.",
+    )
+
+
+def enforce_policy_config(current_user: Dict[str, Any] = Depends(get_current_user)) -> Dict[str, Any]:
+    """RAG config is organization SUADMIN (cloud) or desktop ADMIN/MASTER_ADMIN."""
+    user_id = int(current_user["sub"])
+    if not metadata_service.can_manage_policy_config(user_id):
+        raise HTTPException(
+            status_code=403,
+            detail="Access Denied: Policy RAG configuration requires organization SUADMIN "
+                   "(cloud) or ADMIN/MASTER_ADMIN (desktop).",
+        )
+    return current_user
+
